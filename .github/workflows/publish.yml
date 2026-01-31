@@ -18,7 +18,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.22.1
+        uses: pypa/cibuildwheel@v2.22.0
         env:
           # Limit builds to major platforms to save time/credits
           # Remove these filters if you want to support more Python versions/archs
@@ -37,9 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build sdist
-        run: pipx run build --sdist
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          pipx run build --sdist
 
       - uses: actions/upload-artifact@v4
         with:
