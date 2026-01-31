@@ -18,7 +18,13 @@ class CMakeBuild(build_ext):
             "-DBUILD_PYTHON_BINDINGS=ON",
             "-DBUILD_TESTS=OFF"
         ]
-        
+
+        if sys.platform == "darwin":
+            # cibuildwheel sets CMAKE_OSX_ARCHITECTURES
+            architectures = os.environ.get("CMAKE_OSX_ARCHITECTURES", "")
+            if architectures:
+                cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={architectures}")
+
         cfg = "Debug" if self.debug else "Release"
         build_args = ["--config", cfg]
 
