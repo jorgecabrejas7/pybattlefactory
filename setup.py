@@ -40,10 +40,6 @@ class CMakeBuild(build_ext):
         subprocess.run(["cmake", "--build", "."] + build_args, cwd=self.build_temp, check=True)
 
 setup(
-    name="pybattle",
-    version="0.1.0",
-    packages=["pybattle"],
-    package_dir={"": "."},
     ext_modules=[CMakeExtension("pybattle.pybattle_native", sourcedir=".")],
     cmdclass={"build_ext": CMakeBuild},
     zip_safe=False,
