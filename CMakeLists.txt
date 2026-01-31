@@ -22,7 +22,11 @@ add_library(battle_sim STATIC
 )
 
 target_include_directories(battle_sim PUBLIC include)
-target_compile_options(battle_sim PRIVATE -Wall -Wextra -O3 -fPIC)
+if(MSVC)
+    target_compile_options(battle_sim PRIVATE /W3 /O2)
+else()
+    target_compile_options(battle_sim PRIVATE -Wall -Wextra -O3 -fPIC)
+endif()
 
 # Python bindings
 option(BUILD_PYTHON_BINDINGS "Build Python bindings" ON)
