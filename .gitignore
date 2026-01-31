@@ -1,0 +1,8 @@
+build/
+dist/
+wheelhouse/
+*.egg-info/
+__pycache__/
+*.so
+.cibuildwheel/
+.pytest_cache/
