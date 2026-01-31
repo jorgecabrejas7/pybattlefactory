@@ -1,0 +1,6 @@
+include CMakeLists.txt
+recursive-include src *
+recursive-include include *
+recursive-include pybattle *.py
+include LICENSE
+include README.md

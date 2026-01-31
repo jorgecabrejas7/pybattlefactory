@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -flto -shared  -o pybattle.cpython-312-x86_64-linux-gnu.so CMakeFiles/pybattle.dir/src/python/bindings.cpp.o  libbattle_sim.a 

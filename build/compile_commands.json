@@ -1,0 +1,104 @@
+[
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/types.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/types.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/types.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/types.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/damage.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/damage.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/damage.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/damage.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/ai.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/ai.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/ai.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/ai_context.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/ai_context.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/factory.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/factory.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/factory.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/factory.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -Wall -Wextra -O3 -fPIC -o CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp",
+  "output": "CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++ -Dpybattle_EXPORTS -I/home/apollo/Dev/pokeemerald/simulator/include -isystem /home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-src/include -isystem /home/apollo/anaconda3/include/python3.12 -std=gnu++17 -fPIC -fvisibility=hidden -flto -fno-fat-lto-objects -o CMakeFiles/pybattle.dir/src/python/bindings.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/python/bindings.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/src/python/bindings.cpp",
+  "output": "CMakeFiles/pybattle.dir/src/python/bindings.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -o CMakeFiles/test_damage.dir/tests/test_damage.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/tests/test_damage.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/tests/test_damage.cpp",
+  "output": "CMakeFiles/test_damage.dir/tests/test_damage.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -o CMakeFiles/test_battle.dir/tests/test_battle.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/tests/test_battle.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/tests/test_battle.cpp",
+  "output": "CMakeFiles/test_battle.dir/tests/test_battle.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -o CMakeFiles/test_factory.dir/tests/test_factory.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/tests/test_factory.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/tests/test_factory.cpp",
+  "output": "CMakeFiles/test_factory.dir/tests/test_factory.cpp.o"
+},
+{
+  "directory": "/home/apollo/Dev/pokeemerald/simulator/build",
+  "command": "/usr/bin/c++  -I/home/apollo/Dev/pokeemerald/simulator/include -std=gnu++17 -o CMakeFiles/test_ai.dir/tests/test_ai.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/tests/test_ai.cpp",
+  "file": "/home/apollo/Dev/pokeemerald/simulator/tests/test_ai.cpp",
+  "output": "CMakeFiles/test_ai.dir/tests/test_ai.cpp.o"
+}
+]

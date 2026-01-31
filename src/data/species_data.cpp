@@ -1,0 +1,789 @@
+#include "data.hpp"
+
+namespace pkmn {
+
+// Species data array - extracted from species_info.h
+// Format: {HP, Atk, Def, Spd, SpA, SpD, Type1, Type2, {Ability1, Ability2}, GenderRatio}
+static const SpeciesData SPECIES_DATA[] = {
+    // SPECIES_NONE (0)
+    {0, 0, 0, 0, 0, 0, Type::Normal, Type::Normal, {ABILITY_NONE, ABILITY_NONE}, 255},
+    // SPECIES_BULBASAUR (1)
+    {45, 49, 49, 45, 65, 65, Type::Grass, Type::Poison, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_IVYSAUR (2)
+    {60, 62, 63, 60, 80, 80, Type::Grass, Type::Poison, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_VENUSAUR (3)
+    {80, 82, 83, 80, 100, 100, Type::Grass, Type::Poison, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_CHARMANDER (4)
+    {39, 52, 43, 65, 60, 50, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_CHARMELEON (5)
+    {58, 64, 58, 80, 80, 65, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_CHARIZARD (6)
+    {78, 84, 78, 100, 109, 85, Type::Fire, Type::Flying, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_SQUIRTLE (7)
+    {44, 48, 65, 43, 50, 64, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_WARTORTLE (8)
+    {59, 63, 80, 58, 65, 80, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_BLASTOISE (9)
+    {79, 83, 100, 78, 85, 105, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_CATERPIE (10)
+    {45, 30, 35, 45, 20, 20, Type::Bug, Type::Bug, {ABILITY_SHIELD_DUST, ABILITY_NONE}, 127},
+    // SPECIES_METAPOD (11)
+    {50, 20, 55, 30, 25, 25, Type::Bug, Type::Bug, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_BUTTERFREE (12)
+    {60, 45, 50, 70, 80, 80, Type::Bug, Type::Flying, {ABILITY_COMPOUND_EYES, ABILITY_NONE}, 127},
+    // SPECIES_WEEDLE (13)
+    {40, 35, 30, 50, 20, 20, Type::Bug, Type::Poison, {ABILITY_SHIELD_DUST, ABILITY_NONE}, 127},
+    // SPECIES_KAKUNA (14)
+    {45, 25, 50, 35, 25, 25, Type::Bug, Type::Poison, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_BEEDRILL (15)
+    {65, 80, 40, 75, 45, 80, Type::Bug, Type::Poison, {ABILITY_SWARM, ABILITY_NONE}, 127},
+    // SPECIES_PIDGEY (16)
+    {40, 45, 40, 56, 35, 35, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_PIDGEOTTO (17)
+    {63, 60, 55, 71, 50, 50, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_PIDGEOT (18)
+    {83, 80, 75, 91, 70, 70, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_RATTATA (19)
+    {30, 56, 35, 72, 25, 35, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_GUTS}, 127},
+    // SPECIES_RATICATE (20)
+    {55, 81, 60, 97, 50, 70, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_GUTS}, 127},
+    // SPECIES_SPEAROW (21)
+    {40, 60, 30, 70, 31, 31, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_FEAROW (22)
+    {65, 90, 65, 100, 61, 61, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_EKANS (23)
+    {35, 60, 44, 55, 40, 54, Type::Poison, Type::Poison, {ABILITY_INTIMIDATE, ABILITY_SHED_SKIN}, 127},
+    // SPECIES_ARBOK (24)
+    {60, 85, 69, 80, 65, 79, Type::Poison, Type::Poison, {ABILITY_INTIMIDATE, ABILITY_SHED_SKIN}, 127},
+    // SPECIES_PIKACHU (25)
+    {35, 55, 30, 90, 50, 40, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_RAICHU (26)
+    {60, 90, 55, 100, 90, 80, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_SANDSHREW (27)
+    {50, 75, 85, 40, 20, 30, Type::Ground, Type::Ground, {ABILITY_SAND_VEIL, ABILITY_NONE}, 127},
+    // SPECIES_SANDSLASH (28)
+    {75, 100, 110, 65, 45, 55, Type::Ground, Type::Ground, {ABILITY_SAND_VEIL, ABILITY_NONE}, 127},
+    // SPECIES_NIDORAN_F (29)
+    {55, 47, 52, 41, 40, 40, Type::Poison, Type::Poison, {ABILITY_POISON_POINT, ABILITY_NONE}, 254},
+    // SPECIES_NIDORINA (30)
+    {70, 62, 67, 56, 55, 55, Type::Poison, Type::Poison, {ABILITY_POISON_POINT, ABILITY_NONE}, 254},
+    // SPECIES_NIDOQUEEN (31)
+    {90, 82, 87, 76, 75, 85, Type::Poison, Type::Ground, {ABILITY_POISON_POINT, ABILITY_NONE}, 254},
+    // SPECIES_NIDORAN_M (32)
+    {46, 57, 40, 50, 40, 40, Type::Poison, Type::Poison, {ABILITY_POISON_POINT, ABILITY_NONE}, 0},
+    // SPECIES_NIDORINO (33)
+    {61, 72, 57, 65, 55, 55, Type::Poison, Type::Poison, {ABILITY_POISON_POINT, ABILITY_NONE}, 0},
+    // SPECIES_NIDOKING (34)
+    {81, 92, 77, 85, 85, 75, Type::Poison, Type::Ground, {ABILITY_POISON_POINT, ABILITY_NONE}, 0},
+    // SPECIES_CLEFAIRY (35)
+    {70, 45, 48, 35, 60, 65, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_CLEFABLE (36)
+    {95, 70, 73, 60, 85, 90, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_VULPIX (37)
+    {38, 41, 40, 65, 50, 65, Type::Fire, Type::Fire, {ABILITY_FLASH_FIRE, ABILITY_NONE}, 191},
+    // SPECIES_NINETALES (38)
+    {73, 76, 75, 100, 81, 100, Type::Fire, Type::Fire, {ABILITY_FLASH_FIRE, ABILITY_NONE}, 191},
+    // SPECIES_JIGGLYPUFF (39)
+    {115, 45, 20, 20, 45, 25, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_WIGGLYTUFF (40)
+    {140, 70, 45, 45, 75, 50, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_ZUBAT (41)
+    {40, 45, 35, 55, 30, 40, Type::Poison, Type::Flying, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_GOLBAT (42)
+    {75, 80, 70, 90, 65, 75, Type::Poison, Type::Flying, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_ODDISH (43)
+    {45, 50, 55, 30, 75, 65, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_GLOOM (44)
+    {60, 65, 70, 40, 85, 75, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_VILEPLUME (45)
+    {75, 80, 85, 50, 100, 90, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_PARAS (46)
+    {35, 70, 55, 25, 45, 55, Type::Bug, Type::Grass, {ABILITY_EFFECT_SPORE, ABILITY_NONE}, 127},
+    // SPECIES_PARASECT (47)
+    {60, 95, 80, 30, 60, 80, Type::Bug, Type::Grass, {ABILITY_EFFECT_SPORE, ABILITY_NONE}, 127},
+    // SPECIES_VENONAT (48)
+    {60, 55, 50, 45, 40, 55, Type::Bug, Type::Poison, {ABILITY_COMPOUND_EYES, ABILITY_NONE}, 127},
+    // SPECIES_VENOMOTH (49)
+    {70, 65, 60, 90, 90, 75, Type::Bug, Type::Poison, {ABILITY_SHIELD_DUST, ABILITY_NONE}, 127},
+    // SPECIES_DIGLETT (50)
+    {10, 55, 25, 95, 35, 45, Type::Ground, Type::Ground, {ABILITY_SAND_VEIL, ABILITY_ARENA_TRAP}, 127},
+    // SPECIES_DUGTRIO (51)
+    {35, 80, 50, 120, 50, 70, Type::Ground, Type::Ground, {ABILITY_SAND_VEIL, ABILITY_ARENA_TRAP}, 127},
+    // SPECIES_MEOWTH (52)
+    {40, 45, 35, 90, 40, 40, Type::Normal, Type::Normal, {ABILITY_PICKUP, ABILITY_NONE}, 127},
+    // SPECIES_PERSIAN (53)
+    {65, 70, 60, 115, 65, 65, Type::Normal, Type::Normal, {ABILITY_LIMBER, ABILITY_NONE}, 127},
+    // SPECIES_PSYDUCK (54)
+    {50, 52, 48, 55, 65, 50, Type::Water, Type::Water, {ABILITY_DAMP, ABILITY_CLOUD_NINE}, 127},
+    // SPECIES_GOLDUCK (55)
+    {80, 82, 78, 85, 95, 80, Type::Water, Type::Water, {ABILITY_DAMP, ABILITY_CLOUD_NINE}, 127},
+    // SPECIES_MANKEY (56)
+    {40, 80, 35, 70, 35, 45, Type::Fighting, Type::Fighting, {ABILITY_VITAL_SPIRIT, ABILITY_NONE}, 127},
+    // SPECIES_PRIMEAPE (57)
+    {65, 105, 60, 95, 60, 70, Type::Fighting, Type::Fighting, {ABILITY_VITAL_SPIRIT, ABILITY_NONE}, 127},
+    // SPECIES_GROWLITHE (58)
+    {55, 70, 45, 60, 70, 50, Type::Fire, Type::Fire, {ABILITY_INTIMIDATE, ABILITY_FLASH_FIRE}, 63},
+    // SPECIES_ARCANINE (59)
+    {90, 110, 80, 95, 100, 80, Type::Fire, Type::Fire, {ABILITY_INTIMIDATE, ABILITY_FLASH_FIRE}, 63},
+    // SPECIES_POLIWAG (60)
+    {40, 50, 40, 90, 40, 40, Type::Water, Type::Water, {ABILITY_WATER_ABSORB, ABILITY_DAMP}, 127},
+    // SPECIES_POLIWHIRL (61)
+    {65, 65, 65, 90, 50, 50, Type::Water, Type::Water, {ABILITY_WATER_ABSORB, ABILITY_DAMP}, 127},
+    // SPECIES_POLIWRATH (62)
+    {90, 85, 95, 70, 70, 90, Type::Water, Type::Fighting, {ABILITY_WATER_ABSORB, ABILITY_DAMP}, 127},
+    // SPECIES_ABRA (63)
+    {25, 20, 15, 90, 105, 55, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_INNER_FOCUS}, 63},
+    // SPECIES_KADABRA (64)
+    {40, 35, 30, 105, 120, 70, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_INNER_FOCUS}, 63},
+    // SPECIES_ALAKAZAM (65)
+    {55, 50, 45, 120, 135, 85, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_INNER_FOCUS}, 63},
+    // SPECIES_MACHOP (66)
+    {70, 80, 50, 35, 35, 35, Type::Fighting, Type::Fighting, {ABILITY_GUTS, ABILITY_NONE}, 63},
+    // SPECIES_MACHOKE (67)
+    {80, 100, 70, 45, 50, 60, Type::Fighting, Type::Fighting, {ABILITY_GUTS, ABILITY_NONE}, 63},
+    // SPECIES_MACHAMP (68)
+    {90, 130, 80, 55, 65, 85, Type::Fighting, Type::Fighting, {ABILITY_GUTS, ABILITY_NONE}, 63},
+    // SPECIES_BELLSPROUT (69)
+    {50, 75, 35, 40, 70, 30, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_WEEPINBELL (70)
+    {65, 90, 50, 55, 85, 45, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_VICTREEBEL (71)
+    {80, 105, 65, 70, 100, 60, Type::Grass, Type::Poison, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_TENTACOOL (72)
+    {40, 40, 35, 70, 50, 100, Type::Water, Type::Poison, {ABILITY_CLEAR_BODY, ABILITY_LIQUID_OOZE}, 127},
+    // SPECIES_TENTACRUEL (73)
+    {80, 70, 65, 100, 80, 120, Type::Water, Type::Poison, {ABILITY_CLEAR_BODY, ABILITY_LIQUID_OOZE}, 127},
+    // SPECIES_GEODUDE (74)
+    {40, 80, 100, 20, 30, 30, Type::Rock, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_STURDY}, 127},
+    // SPECIES_GRAVELER (75)
+    {55, 95, 115, 35, 45, 45, Type::Rock, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_STURDY}, 127},
+    // SPECIES_GOLEM (76)
+    {80, 110, 130, 45, 55, 65, Type::Rock, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_STURDY}, 127},
+    // SPECIES_PONYTA (77)
+    {50, 85, 55, 90, 65, 65, Type::Fire, Type::Fire, {ABILITY_RUN_AWAY, ABILITY_FLASH_FIRE}, 127},
+    // SPECIES_RAPIDASH (78)
+    {65, 100, 70, 105, 80, 80, Type::Fire, Type::Fire, {ABILITY_RUN_AWAY, ABILITY_FLASH_FIRE}, 127},
+    // SPECIES_SLOWPOKE (79)
+    {90, 65, 65, 15, 40, 40, Type::Water, Type::Psychic, {ABILITY_OBLIVIOUS, ABILITY_OWN_TEMPO}, 127},
+    // SPECIES_SLOWBRO (80)
+    {95, 75, 110, 30, 100, 80, Type::Water, Type::Psychic, {ABILITY_OBLIVIOUS, ABILITY_OWN_TEMPO}, 127},
+    // SPECIES_MAGNEMITE (81)
+    {25, 35, 70, 45, 95, 55, Type::Electric, Type::Steel, {ABILITY_MAGNET_PULL, ABILITY_STURDY}, 255},
+    // SPECIES_MAGNETON (82)
+    {50, 60, 95, 70, 120, 70, Type::Electric, Type::Steel, {ABILITY_MAGNET_PULL, ABILITY_STURDY}, 255},
+    // SPECIES_FARFETCHD (83)
+    {52, 65, 55, 60, 58, 62, Type::Normal, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_INNER_FOCUS}, 127},
+    // SPECIES_DODUO (84)
+    {35, 85, 45, 75, 35, 35, Type::Normal, Type::Flying, {ABILITY_RUN_AWAY, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_DODRIO (85)
+    {60, 110, 70, 100, 60, 60, Type::Normal, Type::Flying, {ABILITY_RUN_AWAY, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_SEEL (86)
+    {65, 45, 55, 45, 45, 70, Type::Water, Type::Water, {ABILITY_THICK_FAT, ABILITY_NONE}, 127},
+    // SPECIES_DEWGONG (87)
+    {90, 70, 80, 70, 70, 95, Type::Water, Type::Ice, {ABILITY_THICK_FAT, ABILITY_NONE}, 127},
+    // SPECIES_GRIMER (88)
+    {80, 80, 50, 25, 40, 50, Type::Poison, Type::Poison, {ABILITY_STENCH, ABILITY_STICKY_HOLD}, 127},
+    // SPECIES_MUK (89)
+    {105, 105, 75, 50, 65, 100, Type::Poison, Type::Poison, {ABILITY_STENCH, ABILITY_STICKY_HOLD}, 127},
+    // SPECIES_SHELLDER (90)
+    {30, 65, 100, 40, 45, 25, Type::Water, Type::Water, {ABILITY_SHELL_ARMOR, ABILITY_NONE}, 127},
+    // SPECIES_CLOYSTER (91)
+    {50, 95, 180, 70, 85, 45, Type::Water, Type::Ice, {ABILITY_SHELL_ARMOR, ABILITY_NONE}, 127},
+    // SPECIES_GASTLY (92)
+    {30, 35, 30, 80, 100, 35, Type::Ghost, Type::Poison, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_HAUNTER (93)
+    {45, 50, 45, 95, 115, 55, Type::Ghost, Type::Poison, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_GENGAR (94)
+    {60, 65, 60, 110, 130, 75, Type::Ghost, Type::Poison, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_ONIX (95)
+    {35, 45, 160, 70, 30, 45, Type::Rock, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_STURDY}, 127},
+    // SPECIES_DROWZEE (96)
+    {60, 48, 45, 42, 43, 90, Type::Psychic, Type::Psychic, {ABILITY_INSOMNIA, ABILITY_NONE}, 127},
+    // SPECIES_HYPNO (97)
+    {85, 73, 70, 67, 73, 115, Type::Psychic, Type::Psychic, {ABILITY_INSOMNIA, ABILITY_NONE}, 127},
+    // SPECIES_KRABBY (98)
+    {30, 105, 90, 50, 25, 25, Type::Water, Type::Water, {ABILITY_HYPER_CUTTER, ABILITY_SHELL_ARMOR}, 127},
+    // SPECIES_KINGLER (99)
+    {55, 130, 115, 75, 50, 50, Type::Water, Type::Water, {ABILITY_HYPER_CUTTER, ABILITY_SHELL_ARMOR}, 127},
+    // SPECIES_VOLTORB (100)
+    {40, 30, 50, 100, 55, 55, Type::Electric, Type::Electric, {ABILITY_SOUNDPROOF, ABILITY_STATIC}, 255},
+    // SPECIES_ELECTRODE (101)
+    {60, 50, 70, 140, 80, 80, Type::Electric, Type::Electric, {ABILITY_SOUNDPROOF, ABILITY_STATIC}, 255},
+    // SPECIES_EXEGGCUTE (102)
+    {60, 40, 80, 40, 60, 45, Type::Grass, Type::Psychic, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_EXEGGUTOR (103)
+    {95, 95, 85, 55, 125, 65, Type::Grass, Type::Psychic, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_CUBONE (104)
+    {50, 50, 95, 35, 40, 50, Type::Ground, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_LIGHTNING_ROD}, 127},
+    // SPECIES_MAROWAK (105)
+    {60, 80, 110, 45, 50, 80, Type::Ground, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_LIGHTNING_ROD}, 127},
+    // SPECIES_HITMONLEE (106)
+    {50, 120, 53, 87, 35, 110, Type::Fighting, Type::Fighting, {ABILITY_LIMBER, ABILITY_NONE}, 0},
+    // SPECIES_HITMONCHAN (107)
+    {50, 105, 79, 76, 35, 110, Type::Fighting, Type::Fighting, {ABILITY_KEEN_EYE, ABILITY_NONE}, 0},
+    // SPECIES_LICKITUNG (108)
+    {90, 55, 75, 30, 60, 75, Type::Normal, Type::Normal, {ABILITY_OWN_TEMPO, ABILITY_OBLIVIOUS}, 127},
+    // SPECIES_KOFFING (109)
+    {40, 65, 95, 35, 60, 45, Type::Poison, Type::Poison, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_WEEZING (110)
+    {65, 90, 120, 60, 85, 70, Type::Poison, Type::Poison, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_RHYHORN (111)
+    {80, 85, 95, 25, 30, 30, Type::Ground, Type::Rock, {ABILITY_LIGHTNING_ROD, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_RHYDON (112)
+    {105, 130, 120, 40, 45, 45, Type::Ground, Type::Rock, {ABILITY_LIGHTNING_ROD, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_CHANSEY (113)
+    {250, 5, 5, 50, 35, 105, Type::Normal, Type::Normal, {ABILITY_NATURAL_CURE, ABILITY_SERENE_GRACE}, 254},
+    // SPECIES_TANGELA (114)
+    {65, 55, 115, 60, 100, 40, Type::Grass, Type::Grass, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_KANGASKHAN (115)
+    {105, 95, 80, 90, 40, 80, Type::Normal, Type::Normal, {ABILITY_EARLY_BIRD, ABILITY_NONE}, 254},
+    // SPECIES_HORSEA (116)
+    {30, 40, 70, 60, 70, 25, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_SEADRA (117)
+    {55, 65, 95, 85, 95, 45, Type::Water, Type::Water, {ABILITY_POISON_POINT, ABILITY_NONE}, 127},
+    // SPECIES_GOLDEEN (118)
+    {45, 67, 60, 63, 35, 50, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_WATER_VEIL}, 127},
+    // SPECIES_SEAKING (119)
+    {80, 92, 65, 68, 65, 80, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_WATER_VEIL}, 127},
+    // SPECIES_STARYU (120)
+    {30, 45, 55, 85, 70, 55, Type::Water, Type::Water, {ABILITY_ILLUMINATE, ABILITY_NATURAL_CURE}, 255},
+    // SPECIES_STARMIE (121)
+    {60, 75, 85, 115, 100, 85, Type::Water, Type::Psychic, {ABILITY_ILLUMINATE, ABILITY_NATURAL_CURE}, 255},
+    // SPECIES_MR_MIME (122)
+    {40, 45, 65, 90, 100, 120, Type::Psychic, Type::Psychic, {ABILITY_SOUNDPROOF, ABILITY_NONE}, 127},
+    // SPECIES_SCYTHER (123)
+    {70, 110, 80, 105, 55, 80, Type::Bug, Type::Flying, {ABILITY_SWARM, ABILITY_NONE}, 127},
+    // SPECIES_JYNX (124)
+    {65, 50, 35, 95, 115, 95, Type::Ice, Type::Psychic, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 254},
+    // SPECIES_ELECTABUZZ (125)
+    {65, 83, 57, 105, 95, 85, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 63},
+    // SPECIES_MAGMAR (126)
+    {65, 95, 57, 93, 100, 85, Type::Fire, Type::Fire, {ABILITY_FLAME_BODY, ABILITY_NONE}, 63},
+    // SPECIES_PINSIR (127)
+    {65, 125, 100, 85, 55, 70, Type::Bug, Type::Bug, {ABILITY_HYPER_CUTTER, ABILITY_NONE}, 127},
+    // SPECIES_TAUROS (128)
+    {75, 100, 95, 110, 40, 70, Type::Normal, Type::Normal, {ABILITY_INTIMIDATE, ABILITY_NONE}, 0},
+    // SPECIES_MAGIKARP (129)
+    {20, 10, 55, 80, 15, 20, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_GYARADOS (130)
+    {95, 125, 79, 81, 60, 100, Type::Water, Type::Flying, {ABILITY_INTIMIDATE, ABILITY_NONE}, 127},
+    // SPECIES_LAPRAS (131)
+    {130, 85, 80, 60, 85, 95, Type::Water, Type::Ice, {ABILITY_WATER_ABSORB, ABILITY_SHELL_ARMOR}, 127},
+    // SPECIES_DITTO (132)
+    {48, 48, 48, 48, 48, 48, Type::Normal, Type::Normal, {ABILITY_LIMBER, ABILITY_NONE}, 255},
+    // SPECIES_EEVEE (133)
+    {55, 55, 50, 55, 45, 65, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_NONE}, 31},
+    // SPECIES_VAPOREON (134)
+    {130, 65, 60, 65, 110, 95, Type::Water, Type::Water, {ABILITY_WATER_ABSORB, ABILITY_NONE}, 31},
+    // SPECIES_JOLTEON (135)
+    {65, 65, 60, 130, 110, 95, Type::Electric, Type::Electric, {ABILITY_VOLT_ABSORB, ABILITY_NONE}, 31},
+    // SPECIES_FLAREON (136)
+    {65, 130, 60, 65, 95, 110, Type::Fire, Type::Fire, {ABILITY_FLASH_FIRE, ABILITY_NONE}, 31},
+    // SPECIES_PORYGON (137)
+    {65, 60, 70, 40, 85, 75, Type::Normal, Type::Normal, {ABILITY_TRACE, ABILITY_NONE}, 255},
+    // SPECIES_OMANYTE (138)
+    {35, 40, 100, 35, 90, 55, Type::Rock, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_SHELL_ARMOR}, 31},
+    // SPECIES_OMASTAR (139)
+    {70, 60, 125, 55, 115, 70, Type::Rock, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_SHELL_ARMOR}, 31},
+    // SPECIES_KABUTO (140)
+    {30, 80, 90, 55, 55, 45, Type::Rock, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_BATTLE_ARMOR}, 31},
+    // SPECIES_KABUTOPS (141)
+    {60, 115, 105, 80, 65, 70, Type::Rock, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_BATTLE_ARMOR}, 31},
+    // SPECIES_AERODACTYL (142)
+    {80, 105, 65, 130, 60, 75, Type::Rock, Type::Flying, {ABILITY_ROCK_HEAD, ABILITY_PRESSURE}, 31},
+    // SPECIES_SNORLAX (143)
+    {160, 110, 65, 30, 65, 110, Type::Normal, Type::Normal, {ABILITY_IMMUNITY, ABILITY_THICK_FAT}, 31},
+    // SPECIES_ARTICUNO (144)
+    {90, 85, 100, 85, 95, 125, Type::Ice, Type::Flying, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_ZAPDOS (145)
+    {90, 90, 85, 100, 125, 90, Type::Electric, Type::Flying, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_MOLTRES (146)
+    {90, 100, 90, 90, 125, 85, Type::Fire, Type::Flying, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_DRATINI (147)
+    {41, 64, 45, 50, 50, 50, Type::Dragon, Type::Dragon, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_DRAGONAIR (148)
+    {61, 84, 65, 70, 70, 70, Type::Dragon, Type::Dragon, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_DRAGONITE (149)
+    {91, 134, 95, 80, 100, 100, Type::Dragon, Type::Flying, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_MEWTWO (150)
+    {106, 110, 90, 130, 154, 90, Type::Psychic, Type::Psychic, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_MEW (151)
+    {100, 100, 100, 100, 100, 100, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_NONE}, 255},
+    // SPECIES_CHIKORITA (152)
+    {45, 49, 65, 45, 49, 65, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_BAYLEEF (153)
+    {60, 62, 80, 60, 63, 80, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_MEGANIUM (154)
+    {80, 82, 100, 80, 83, 100, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_CYNDAQUIL (155)
+    {39, 52, 43, 65, 60, 50, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_QUILAVA (156)
+    {58, 64, 58, 80, 80, 65, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_TYPHLOSION (157)
+    {78, 84, 78, 100, 109, 85, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_TOTODILE (158)
+    {50, 65, 64, 43, 44, 48, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_CROCONAW (159)
+    {65, 80, 80, 58, 59, 63, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_FERALIGATR (160)
+    {85, 105, 100, 78, 79, 83, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_SENTRET (161)
+    {35, 46, 34, 20, 35, 45, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_KEEN_EYE}, 127},
+    // SPECIES_FURRET (162)
+    {85, 76, 64, 90, 45, 55, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_KEEN_EYE}, 127},
+    // SPECIES_HOOTHOOT (163)
+    {60, 30, 30, 50, 36, 56, Type::Normal, Type::Flying, {ABILITY_INSOMNIA, ABILITY_KEEN_EYE}, 127},
+    // SPECIES_NOCTOWL (164)
+    {100, 50, 50, 70, 76, 96, Type::Normal, Type::Flying, {ABILITY_INSOMNIA, ABILITY_KEEN_EYE}, 127},
+    // SPECIES_LEDYBA (165)
+    {40, 20, 30, 55, 40, 80, Type::Bug, Type::Flying, {ABILITY_SWARM, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_LEDIAN (166)
+    {55, 35, 50, 85, 55, 110, Type::Bug, Type::Flying, {ABILITY_SWARM, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_SPINARAK (167)
+    {40, 60, 40, 30, 40, 40, Type::Bug, Type::Poison, {ABILITY_SWARM, ABILITY_INSOMNIA}, 127},
+    // SPECIES_ARIADOS (168)
+    {70, 90, 70, 40, 60, 60, Type::Bug, Type::Poison, {ABILITY_SWARM, ABILITY_INSOMNIA}, 127},
+    // SPECIES_CROBAT (169)
+    {85, 90, 80, 130, 70, 80, Type::Poison, Type::Flying, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_CHINCHOU (170)
+    {75, 38, 38, 67, 56, 56, Type::Water, Type::Electric, {ABILITY_VOLT_ABSORB, ABILITY_ILLUMINATE}, 127},
+    // SPECIES_LANTURN (171)
+    {125, 58, 58, 67, 76, 76, Type::Water, Type::Electric, {ABILITY_VOLT_ABSORB, ABILITY_ILLUMINATE}, 127},
+    // SPECIES_PICHU (172)
+    {20, 40, 15, 60, 35, 35, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_CLEFFA (173)
+    {50, 25, 28, 15, 45, 55, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_IGGLYBUFF (174)
+    {90, 30, 15, 15, 40, 20, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_TOGEPI (175)
+    {35, 20, 65, 20, 40, 65, Type::Normal, Type::Normal, {ABILITY_HUSTLE, ABILITY_SERENE_GRACE}, 31},
+    // SPECIES_TOGETIC (176)
+    {55, 40, 85, 40, 80, 105, Type::Normal, Type::Flying, {ABILITY_HUSTLE, ABILITY_SERENE_GRACE}, 31},
+    // SPECIES_NATU (177)
+    {40, 50, 45, 70, 70, 45, Type::Psychic, Type::Flying, {ABILITY_SYNCHRONIZE, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_XATU (178)
+    {65, 75, 70, 95, 95, 70, Type::Psychic, Type::Flying, {ABILITY_SYNCHRONIZE, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_MAREEP (179)
+    {55, 40, 40, 35, 65, 45, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_FLAAFFY (180)
+    {70, 55, 55, 45, 80, 60, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_AMPHAROS (181)
+    {90, 75, 75, 55, 115, 90, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 127},
+    // SPECIES_BELLOSSOM (182)
+    {75, 80, 85, 50, 90, 100, Type::Grass, Type::Grass, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_MARILL (183)
+    {70, 20, 50, 40, 20, 50, Type::Water, Type::Water, {ABILITY_THICK_FAT, ABILITY_HUGE_POWER}, 127},
+    // SPECIES_AZUMARILL (184)
+    {100, 50, 80, 50, 50, 80, Type::Water, Type::Water, {ABILITY_THICK_FAT, ABILITY_HUGE_POWER}, 127},
+    // SPECIES_SUDOWOODO (185)
+    {70, 100, 115, 30, 30, 65, Type::Rock, Type::Rock, {ABILITY_STURDY, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_POLITOED (186)
+    {90, 75, 75, 70, 90, 100, Type::Water, Type::Water, {ABILITY_WATER_ABSORB, ABILITY_DAMP}, 127},
+    // SPECIES_HOPPIP (187)
+    {35, 35, 40, 50, 35, 55, Type::Grass, Type::Flying, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_SKIPLOOM (188)
+    {55, 45, 50, 80, 45, 65, Type::Grass, Type::Flying, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_JUMPLUFF (189)
+    {75, 55, 70, 110, 55, 85, Type::Grass, Type::Flying, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_AIPOM (190)
+    {55, 70, 55, 85, 40, 55, Type::Normal, Type::Normal, {ABILITY_RUN_AWAY, ABILITY_PICKUP}, 127},
+    // SPECIES_SUNKERN (191)
+    {30, 30, 30, 30, 30, 30, Type::Grass, Type::Grass, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_SUNFLORA (192)
+    {75, 75, 55, 30, 105, 85, Type::Grass, Type::Grass, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_YANMA (193)
+    {65, 65, 45, 95, 75, 45, Type::Bug, Type::Flying, {ABILITY_SPEED_BOOST, ABILITY_COMPOUND_EYES}, 127},
+    // SPECIES_WOOPER (194)
+    {55, 45, 45, 15, 25, 25, Type::Water, Type::Ground, {ABILITY_DAMP, ABILITY_WATER_ABSORB}, 127},
+    // SPECIES_QUAGSIRE (195)
+    {95, 85, 85, 35, 65, 65, Type::Water, Type::Ground, {ABILITY_DAMP, ABILITY_WATER_ABSORB}, 127},
+    // SPECIES_ESPEON (196)
+    {65, 65, 60, 110, 130, 95, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_NONE}, 31},
+    // SPECIES_UMBREON (197)
+    {95, 65, 110, 65, 60, 130, Type::Dark, Type::Dark, {ABILITY_SYNCHRONIZE, ABILITY_NONE}, 31},
+    // SPECIES_MURKROW (198)
+    {60, 85, 42, 91, 85, 42, Type::Dark, Type::Flying, {ABILITY_INSOMNIA, ABILITY_NONE}, 127},
+    // SPECIES_SLOWKING (199)
+    {95, 75, 80, 30, 100, 110, Type::Water, Type::Psychic, {ABILITY_OBLIVIOUS, ABILITY_OWN_TEMPO}, 127},
+    // SPECIES_MISDREAVUS (200)
+    {60, 60, 60, 85, 85, 85, Type::Ghost, Type::Ghost, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_UNOWN (201)
+    {48, 72, 48, 48, 72, 48, Type::Psychic, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 255},
+    // SPECIES_WOBBUFFET (202)
+    {190, 33, 58, 33, 33, 58, Type::Psychic, Type::Psychic, {ABILITY_SHADOW_TAG, ABILITY_NONE}, 127},
+    // SPECIES_GIRAFARIG (203)
+    {70, 80, 65, 85, 90, 65, Type::Normal, Type::Psychic, {ABILITY_INNER_FOCUS, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_PINECO (204)
+    {50, 65, 90, 15, 35, 35, Type::Bug, Type::Bug, {ABILITY_STURDY, ABILITY_NONE}, 127},
+    // SPECIES_FORRETRESS (205)
+    {75, 90, 140, 40, 60, 60, Type::Bug, Type::Steel, {ABILITY_STURDY, ABILITY_NONE}, 127},
+    // SPECIES_DUNSPARCE (206)
+    {100, 70, 70, 45, 65, 65, Type::Normal, Type::Normal, {ABILITY_SERENE_GRACE, ABILITY_RUN_AWAY}, 127},
+    // SPECIES_GLIGAR (207)
+    {65, 75, 105, 85, 35, 65, Type::Ground, Type::Flying, {ABILITY_HYPER_CUTTER, ABILITY_SAND_VEIL}, 127},
+    // SPECIES_STEELIX (208)
+    {75, 85, 200, 30, 55, 65, Type::Steel, Type::Ground, {ABILITY_ROCK_HEAD, ABILITY_STURDY}, 127},
+    // SPECIES_SNUBBULL (209)
+    {60, 80, 50, 30, 40, 40, Type::Normal, Type::Normal, {ABILITY_INTIMIDATE, ABILITY_RUN_AWAY}, 191},
+    // SPECIES_GRANBULL (210)
+    {90, 120, 75, 45, 60, 60, Type::Normal, Type::Normal, {ABILITY_INTIMIDATE, ABILITY_INTIMIDATE}, 191},
+    // SPECIES_QWILFISH (211)
+    {65, 95, 75, 85, 55, 55, Type::Water, Type::Poison, {ABILITY_POISON_POINT, ABILITY_SWIFT_SWIM}, 127},
+    // SPECIES_SCIZOR (212)
+    {70, 130, 100, 65, 55, 80, Type::Bug, Type::Steel, {ABILITY_SWARM, ABILITY_NONE}, 127},
+    // SPECIES_SHUCKLE (213)
+    {20, 10, 230, 5, 10, 230, Type::Bug, Type::Rock, {ABILITY_STURDY, ABILITY_NONE}, 127},
+    // SPECIES_HERACROSS (214)
+    {80, 125, 75, 85, 40, 95, Type::Bug, Type::Fighting, {ABILITY_SWARM, ABILITY_GUTS}, 127},
+    // SPECIES_SNEASEL (215)
+    {55, 95, 55, 115, 35, 75, Type::Dark, Type::Ice, {ABILITY_INNER_FOCUS, ABILITY_KEEN_EYE}, 127},
+    // SPECIES_TEDDIURSA (216)
+    {60, 80, 50, 40, 50, 50, Type::Normal, Type::Normal, {ABILITY_PICKUP, ABILITY_NONE}, 127},
+    // SPECIES_URSARING (217)
+    {90, 130, 75, 55, 75, 75, Type::Normal, Type::Normal, {ABILITY_GUTS, ABILITY_NONE}, 127},
+    // SPECIES_SLUGMA (218)
+    {40, 40, 40, 20, 70, 40, Type::Fire, Type::Fire, {ABILITY_MAGMA_ARMOR, ABILITY_FLAME_BODY}, 127},
+    // SPECIES_MAGCARGO (219)
+    {50, 50, 120, 30, 80, 80, Type::Fire, Type::Rock, {ABILITY_MAGMA_ARMOR, ABILITY_FLAME_BODY}, 127},
+    // SPECIES_SWINUB (220)
+    {50, 50, 40, 50, 30, 30, Type::Ice, Type::Ground, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 127},
+    // SPECIES_PILOSWINE (221)
+    {100, 100, 80, 50, 60, 60, Type::Ice, Type::Ground, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 127},
+    // SPECIES_CORSOLA (222)
+    {55, 55, 85, 35, 65, 85, Type::Water, Type::Rock, {ABILITY_HUSTLE, ABILITY_NATURAL_CURE}, 191},
+    // SPECIES_REMORAID (223)
+    {35, 65, 35, 65, 65, 35, Type::Water, Type::Water, {ABILITY_HUSTLE, ABILITY_NONE}, 127},
+    // SPECIES_OCTILLERY (224)
+    {75, 105, 75, 45, 105, 75, Type::Water, Type::Water, {ABILITY_SUCTION_CUPS, ABILITY_NONE}, 127},
+    // SPECIES_DELIBIRD (225)
+    {45, 55, 45, 75, 65, 45, Type::Ice, Type::Flying, {ABILITY_VITAL_SPIRIT, ABILITY_HUSTLE}, 127},
+    // SPECIES_MANTINE (226)
+    {65, 40, 70, 70, 80, 140, Type::Water, Type::Flying, {ABILITY_SWIFT_SWIM, ABILITY_WATER_ABSORB}, 127},
+    // SPECIES_SKARMORY (227)
+    {65, 80, 140, 70, 40, 70, Type::Steel, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_STURDY}, 127},
+    // SPECIES_HOUNDOUR (228)
+    {45, 60, 30, 65, 80, 50, Type::Dark, Type::Fire, {ABILITY_EARLY_BIRD, ABILITY_FLASH_FIRE}, 127},
+    // SPECIES_HOUNDOOM (229)
+    {75, 90, 50, 95, 110, 80, Type::Dark, Type::Fire, {ABILITY_EARLY_BIRD, ABILITY_FLASH_FIRE}, 127},
+    // SPECIES_KINGDRA (230)
+    {75, 95, 95, 85, 95, 95, Type::Water, Type::Dragon, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_PHANPY (231)
+    {90, 60, 60, 40, 40, 40, Type::Ground, Type::Ground, {ABILITY_PICKUP, ABILITY_NONE}, 127},
+    // SPECIES_DONPHAN (232)
+    {90, 120, 120, 50, 60, 60, Type::Ground, Type::Ground, {ABILITY_STURDY, ABILITY_NONE}, 127},
+    // SPECIES_PORYGON2 (233)
+    {85, 80, 90, 60, 105, 95, Type::Normal, Type::Normal, {ABILITY_TRACE, ABILITY_NONE}, 255},
+    // SPECIES_STANTLER (234)
+    {73, 95, 62, 85, 85, 65, Type::Normal, Type::Normal, {ABILITY_INTIMIDATE, ABILITY_NONE}, 127},
+    // SPECIES_SMEARGLE (235)
+    {55, 20, 35, 75, 20, 45, Type::Normal, Type::Normal, {ABILITY_OWN_TEMPO, ABILITY_NONE}, 127},
+    // SPECIES_TYROGUE (236)
+    {35, 35, 35, 35, 35, 35, Type::Fighting, Type::Fighting, {ABILITY_GUTS, ABILITY_NONE}, 0},
+    // SPECIES_HITMONTOP (237)
+    {50, 95, 95, 70, 35, 110, Type::Fighting, Type::Fighting, {ABILITY_INTIMIDATE, ABILITY_NONE}, 0},
+    // SPECIES_SMOOCHUM (238)
+    {45, 30, 15, 65, 85, 65, Type::Ice, Type::Psychic, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 254},
+    // SPECIES_ELEKID (239)
+    {45, 63, 37, 95, 65, 55, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_NONE}, 63},
+    // SPECIES_MAGBY (240)
+    {45, 75, 37, 83, 70, 55, Type::Fire, Type::Fire, {ABILITY_FLAME_BODY, ABILITY_NONE}, 63},
+    // SPECIES_MILTANK (241)
+    {95, 80, 105, 100, 40, 70, Type::Normal, Type::Normal, {ABILITY_THICK_FAT, ABILITY_NONE}, 254},
+    // SPECIES_BLISSEY (242)
+    {255, 10, 10, 55, 75, 135, Type::Normal, Type::Normal, {ABILITY_NATURAL_CURE, ABILITY_SERENE_GRACE}, 254},
+    // SPECIES_RAIKOU (243)
+    {90, 85, 75, 115, 115, 100, Type::Electric, Type::Electric, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_ENTEI (244)
+    {115, 115, 85, 100, 90, 75, Type::Fire, Type::Fire, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_SUICUNE (245)
+    {100, 75, 115, 85, 90, 115, Type::Water, Type::Water, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_LARVITAR (246)
+    {50, 64, 50, 41, 45, 50, Type::Rock, Type::Ground, {ABILITY_GUTS, ABILITY_NONE}, 127},
+    // SPECIES_PUPITAR (247)
+    {70, 84, 70, 51, 65, 70, Type::Rock, Type::Ground, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_TYRANITAR (248)
+    {100, 134, 110, 61, 95, 100, Type::Rock, Type::Dark, {ABILITY_SAND_STREAM, ABILITY_NONE}, 127},
+    // SPECIES_LUGIA (249)
+    {106, 90, 130, 110, 90, 154, Type::Psychic, Type::Flying, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_HO_OH (250)
+    {106, 130, 90, 90, 110, 154, Type::Fire, Type::Flying, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_CELEBI (251)
+    {100, 100, 100, 100, 100, 100, Type::Psychic, Type::Grass, {ABILITY_NATURAL_CURE, ABILITY_NONE}, 255},
+    // SPECIES_TREECKO (252)
+    {40, 45, 35, 70, 65, 55, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_GROVYLE (253)
+    {50, 65, 45, 95, 85, 65, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_SCEPTILE (254)
+    {70, 85, 65, 120, 105, 85, Type::Grass, Type::Grass, {ABILITY_OVERGROW, ABILITY_NONE}, 31},
+    // SPECIES_TORCHIC (255)
+    {45, 60, 40, 45, 70, 50, Type::Fire, Type::Fire, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_COMBUSKEN (256)
+    {60, 85, 60, 55, 85, 60, Type::Fire, Type::Fighting, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_BLAZIKEN (257)
+    {80, 120, 70, 80, 110, 70, Type::Fire, Type::Fighting, {ABILITY_BLAZE, ABILITY_NONE}, 31},
+    // SPECIES_MUDKIP (258)
+    {50, 70, 50, 40, 50, 50, Type::Water, Type::Water, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_MARSHTOMP (259)
+    {70, 85, 70, 50, 60, 70, Type::Water, Type::Ground, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_SWAMPERT (260)
+    {100, 110, 90, 60, 85, 90, Type::Water, Type::Ground, {ABILITY_TORRENT, ABILITY_NONE}, 31},
+    // SPECIES_POOCHYENA (261)
+    {35, 55, 35, 35, 30, 30, Type::Dark, Type::Dark, {ABILITY_RUN_AWAY, ABILITY_NONE}, 127},
+    // SPECIES_MIGHTYENA (262)
+    {70, 90, 70, 70, 60, 60, Type::Dark, Type::Dark, {ABILITY_INTIMIDATE, ABILITY_NONE}, 127},
+    // SPECIES_ZIGZAGOON (263)
+    {38, 30, 41, 60, 30, 41, Type::Normal, Type::Normal, {ABILITY_PICKUP, ABILITY_NONE}, 127},
+    // SPECIES_LINOONE (264)
+    {78, 70, 61, 100, 50, 61, Type::Normal, Type::Normal, {ABILITY_PICKUP, ABILITY_NONE}, 127},
+    // SPECIES_WURMPLE (265)
+    {45, 45, 35, 20, 20, 30, Type::Bug, Type::Bug, {ABILITY_SHIELD_DUST, ABILITY_NONE}, 127},
+    // SPECIES_SILCOON (266)
+    {50, 35, 55, 15, 25, 25, Type::Bug, Type::Bug, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_BEAUTIFLY (267)
+    {60, 70, 50, 65, 90, 50, Type::Bug, Type::Flying, {ABILITY_SWARM, ABILITY_NONE}, 127},
+    // SPECIES_CASCOON (268)
+    {50, 35, 55, 15, 25, 25, Type::Bug, Type::Bug, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_DUSTOX (269)
+    {60, 50, 70, 65, 50, 90, Type::Bug, Type::Poison, {ABILITY_SHIELD_DUST, ABILITY_NONE}, 127},
+    // SPECIES_LOTAD (270)
+    {40, 30, 30, 30, 40, 50, Type::Water, Type::Grass, {ABILITY_SWIFT_SWIM, ABILITY_RAIN_DISH}, 127},
+    // SPECIES_LOMBRE (271)
+    {60, 50, 50, 50, 60, 70, Type::Water, Type::Grass, {ABILITY_SWIFT_SWIM, ABILITY_RAIN_DISH}, 127},
+    // SPECIES_LUDICOLO (272)
+    {80, 70, 70, 70, 90, 100, Type::Water, Type::Grass, {ABILITY_SWIFT_SWIM, ABILITY_RAIN_DISH}, 127},
+    // SPECIES_SEEDOT (273)
+    {40, 40, 50, 30, 30, 30, Type::Grass, Type::Grass, {ABILITY_CHLOROPHYLL, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_NUZLEAF (274)
+    {70, 70, 40, 60, 60, 40, Type::Grass, Type::Dark, {ABILITY_CHLOROPHYLL, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_SHIFTRY (275)
+    {90, 100, 60, 80, 90, 60, Type::Grass, Type::Dark, {ABILITY_CHLOROPHYLL, ABILITY_EARLY_BIRD}, 127},
+    // SPECIES_NINCADA (276)
+    {31, 45, 90, 40, 30, 30, Type::Bug, Type::Ground, {ABILITY_COMPOUND_EYES, ABILITY_NONE}, 127},
+    // SPECIES_NINJASK (277)
+    {61, 90, 45, 160, 50, 50, Type::Bug, Type::Flying, {ABILITY_SPEED_BOOST, ABILITY_NONE}, 127},
+    // SPECIES_SHEDINJA (278)
+    {1, 90, 45, 40, 30, 30, Type::Bug, Type::Ghost, {ABILITY_WONDER_GUARD, ABILITY_NONE}, 255},
+    // SPECIES_TAILLOW (279)
+    {40, 55, 30, 85, 30, 30, Type::Normal, Type::Flying, {ABILITY_GUTS, ABILITY_NONE}, 127},
+    // SPECIES_SWELLOW (280)
+    {60, 85, 60, 125, 50, 50, Type::Normal, Type::Flying, {ABILITY_GUTS, ABILITY_NONE}, 127},
+    // SPECIES_SHROOMISH (281)
+    {60, 40, 60, 35, 40, 60, Type::Grass, Type::Grass, {ABILITY_EFFECT_SPORE, ABILITY_NONE}, 127},
+    // SPECIES_BRELOOM (282)
+    {60, 130, 80, 70, 60, 60, Type::Grass, Type::Fighting, {ABILITY_EFFECT_SPORE, ABILITY_NONE}, 127},
+    // SPECIES_SPINDA (283)
+    {60, 60, 60, 60, 60, 60, Type::Normal, Type::Normal, {ABILITY_OWN_TEMPO, ABILITY_NONE}, 127},
+    // SPECIES_WINGULL (284)
+    {40, 30, 30, 85, 55, 30, Type::Water, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_PELIPPER (285)
+    {60, 50, 100, 65, 85, 70, Type::Water, Type::Flying, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_SURSKIT (286)
+    {40, 30, 32, 65, 50, 52, Type::Bug, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_MASQUERAIN (287)
+    {70, 60, 62, 60, 80, 82, Type::Bug, Type::Flying, {ABILITY_INTIMIDATE, ABILITY_NONE}, 127},
+    // SPECIES_WAILMER (288)
+    {130, 70, 35, 60, 70, 35, Type::Water, Type::Water, {ABILITY_WATER_VEIL, ABILITY_OBLIVIOUS}, 127},
+    // SPECIES_WAILORD (289)
+    {170, 90, 45, 60, 90, 45, Type::Water, Type::Water, {ABILITY_WATER_VEIL, ABILITY_OBLIVIOUS}, 127},
+    // SPECIES_SKITTY (290)
+    {50, 45, 45, 50, 35, 35, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_DELCATTY (291)
+    {70, 65, 65, 70, 55, 55, Type::Normal, Type::Normal, {ABILITY_CUTE_CHARM, ABILITY_NONE}, 191},
+    // SPECIES_KECLEON (292)
+    {60, 90, 70, 40, 60, 120, Type::Normal, Type::Normal, {ABILITY_COLOR_CHANGE, ABILITY_NONE}, 127},
+    // SPECIES_BALTOY (293)
+    {40, 40, 55, 55, 40, 70, Type::Ground, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 255},
+    // SPECIES_CLAYDOL (294)
+    {60, 70, 105, 75, 70, 120, Type::Ground, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 255},
+    // SPECIES_NOSEPASS (295)
+    {30, 45, 135, 30, 45, 90, Type::Rock, Type::Rock, {ABILITY_STURDY, ABILITY_MAGNET_PULL}, 127},
+    // SPECIES_TORKOAL (296)
+    {70, 85, 140, 20, 85, 70, Type::Fire, Type::Fire, {ABILITY_WHITE_SMOKE, ABILITY_NONE}, 127},
+    // SPECIES_SABLEYE (297)
+    {50, 75, 75, 50, 65, 65, Type::Dark, Type::Ghost, {ABILITY_KEEN_EYE, ABILITY_NONE}, 127},
+    // SPECIES_BARBOACH (298)
+    {50, 48, 43, 60, 46, 41, Type::Water, Type::Ground, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 127},
+    // SPECIES_WHISCASH (299)
+    {110, 78, 73, 60, 76, 71, Type::Water, Type::Ground, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 127},
+    // SPECIES_LUVDISC (300)
+    {43, 30, 55, 97, 40, 65, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 191},
+    // SPECIES_CORPHISH (301)
+    {43, 80, 65, 35, 50, 35, Type::Water, Type::Water, {ABILITY_HYPER_CUTTER, ABILITY_SHELL_ARMOR}, 127},
+    // SPECIES_CRAWDAUNT (302)
+    {63, 120, 85, 55, 90, 55, Type::Water, Type::Dark, {ABILITY_HYPER_CUTTER, ABILITY_SHELL_ARMOR}, 127},
+    // SPECIES_FEEBAS (303)
+    {20, 15, 20, 80, 10, 55, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_MILOTIC (304)
+    {95, 60, 79, 81, 100, 125, Type::Water, Type::Water, {ABILITY_MARVEL_SCALE, ABILITY_NONE}, 127},
+    // SPECIES_CARVANHA (305)
+    {45, 90, 20, 65, 65, 20, Type::Water, Type::Dark, {ABILITY_ROUGH_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_SHARPEDO (306)
+    {70, 120, 40, 95, 95, 40, Type::Water, Type::Dark, {ABILITY_ROUGH_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_TRAPINCH (307)
+    {45, 100, 45, 10, 45, 45, Type::Ground, Type::Ground, {ABILITY_HYPER_CUTTER, ABILITY_ARENA_TRAP}, 127},
+    // SPECIES_VIBRAVA (308)
+    {50, 70, 50, 70, 50, 50, Type::Ground, Type::Dragon, {ABILITY_LEVITATE, ABILITY_LEVITATE}, 127},
+    // SPECIES_FLYGON (309)
+    {80, 100, 80, 100, 80, 80, Type::Ground, Type::Dragon, {ABILITY_LEVITATE, ABILITY_LEVITATE}, 127},
+    // SPECIES_MAKUHITA (310)
+    {72, 60, 30, 25, 20, 30, Type::Fighting, Type::Fighting, {ABILITY_THICK_FAT, ABILITY_GUTS}, 63},
+    // SPECIES_HARIYAMA (311)
+    {144, 120, 60, 50, 40, 60, Type::Fighting, Type::Fighting, {ABILITY_THICK_FAT, ABILITY_GUTS}, 63},
+    // SPECIES_ELECTRIKE (312)
+    {40, 45, 40, 65, 65, 40, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_LIGHTNING_ROD}, 127},
+    // SPECIES_MANECTRIC (313)
+    {70, 75, 60, 105, 105, 60, Type::Electric, Type::Electric, {ABILITY_STATIC, ABILITY_LIGHTNING_ROD}, 127},
+    // SPECIES_NUMEL (314)
+    {60, 60, 40, 35, 65, 45, Type::Fire, Type::Ground, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 127},
+    // SPECIES_CAMERUPT (315)
+    {70, 100, 70, 40, 105, 75, Type::Fire, Type::Ground, {ABILITY_MAGMA_ARMOR, ABILITY_NONE}, 127},
+    // SPECIES_SPHEAL (316)
+    {70, 40, 50, 25, 55, 50, Type::Ice, Type::Water, {ABILITY_THICK_FAT, ABILITY_NONE}, 127},
+    // SPECIES_SEALEO (317)
+    {90, 60, 70, 45, 75, 70, Type::Ice, Type::Water, {ABILITY_THICK_FAT, ABILITY_NONE}, 127},
+    // SPECIES_WALREIN (318)
+    {110, 80, 90, 65, 95, 90, Type::Ice, Type::Water, {ABILITY_THICK_FAT, ABILITY_NONE}, 127},
+    // SPECIES_CACNEA (319)
+    {50, 85, 40, 35, 85, 40, Type::Grass, Type::Grass, {ABILITY_SAND_VEIL, ABILITY_NONE}, 127},
+    // SPECIES_CACTURNE (320)
+    {70, 115, 60, 55, 115, 60, Type::Grass, Type::Dark, {ABILITY_SAND_VEIL, ABILITY_NONE}, 127},
+    // SPECIES_SNORUNT (321)
+    {50, 50, 50, 50, 50, 50, Type::Ice, Type::Ice, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_GLALIE (322)
+    {80, 80, 80, 80, 80, 80, Type::Ice, Type::Ice, {ABILITY_INNER_FOCUS, ABILITY_NONE}, 127},
+    // SPECIES_LUNATONE (323)
+    {70, 55, 65, 70, 95, 85, Type::Rock, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 255},
+    // SPECIES_SOLROCK (324)
+    {70, 95, 85, 70, 55, 65, Type::Rock, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 255},
+    // SPECIES_AZURILL (325)
+    {50, 20, 40, 20, 20, 40, Type::Normal, Type::Normal, {ABILITY_THICK_FAT, ABILITY_HUGE_POWER}, 191},
+    // SPECIES_SPOINK (326)
+    {60, 25, 35, 60, 70, 80, Type::Psychic, Type::Psychic, {ABILITY_THICK_FAT, ABILITY_OWN_TEMPO}, 127},
+    // SPECIES_GRUMPIG (327)
+    {80, 45, 65, 80, 90, 110, Type::Psychic, Type::Psychic, {ABILITY_THICK_FAT, ABILITY_OWN_TEMPO}, 127},
+    // SPECIES_PLUSLE (328)
+    {60, 50, 40, 95, 85, 75, Type::Electric, Type::Electric, {ABILITY_PLUS, ABILITY_NONE}, 127},
+    // SPECIES_MINUN (329)
+    {60, 40, 50, 95, 75, 85, Type::Electric, Type::Electric, {ABILITY_MINUS, ABILITY_NONE}, 127},
+    // SPECIES_MAWILE (330)
+    {50, 85, 85, 50, 55, 55, Type::Steel, Type::Steel, {ABILITY_HYPER_CUTTER, ABILITY_INTIMIDATE}, 127},
+    // SPECIES_MEDITITE (331)
+    {30, 40, 55, 60, 40, 55, Type::Fighting, Type::Psychic, {ABILITY_PURE_POWER, ABILITY_NONE}, 127},
+    // SPECIES_MEDICHAM (332)
+    {60, 60, 75, 80, 60, 75, Type::Fighting, Type::Psychic, {ABILITY_PURE_POWER, ABILITY_NONE}, 127},
+    // SPECIES_SWABLU (333)
+    {45, 40, 60, 50, 40, 75, Type::Normal, Type::Flying, {ABILITY_NATURAL_CURE, ABILITY_NONE}, 127},
+    // SPECIES_ALTARIA (334)
+    {75, 70, 90, 80, 70, 105, Type::Dragon, Type::Flying, {ABILITY_NATURAL_CURE, ABILITY_NONE}, 127},
+    // SPECIES_WYNAUT (335)
+    {95, 23, 48, 23, 23, 48, Type::Psychic, Type::Psychic, {ABILITY_SHADOW_TAG, ABILITY_NONE}, 127},
+    // SPECIES_DUSKULL (336)
+    {20, 40, 90, 25, 30, 90, Type::Ghost, Type::Ghost, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+    // SPECIES_DUSCLOPS (337)
+    {40, 70, 130, 25, 60, 130, Type::Ghost, Type::Ghost, {ABILITY_PRESSURE, ABILITY_NONE}, 127},
+    // SPECIES_ROSELIA (338)
+    {50, 60, 45, 65, 100, 80, Type::Grass, Type::Poison, {ABILITY_NATURAL_CURE, ABILITY_POISON_POINT}, 127},
+    // SPECIES_SLAKOTH (339)
+    {60, 60, 60, 30, 35, 35, Type::Normal, Type::Normal, {ABILITY_TRUANT, ABILITY_NONE}, 127},
+    // SPECIES_VIGOROTH (340)
+    {80, 80, 80, 90, 55, 55, Type::Normal, Type::Normal, {ABILITY_VITAL_SPIRIT, ABILITY_NONE}, 127},
+    // SPECIES_SLAKING (341)
+    {150, 160, 100, 100, 95, 65, Type::Normal, Type::Normal, {ABILITY_TRUANT, ABILITY_NONE}, 127},
+    // SPECIES_GULPIN (342)
+    {70, 43, 53, 40, 43, 53, Type::Poison, Type::Poison, {ABILITY_LIQUID_OOZE, ABILITY_STICKY_HOLD}, 127},
+    // SPECIES_SWALOT (343)
+    {100, 73, 83, 55, 73, 83, Type::Poison, Type::Poison, {ABILITY_LIQUID_OOZE, ABILITY_STICKY_HOLD}, 127},
+    // SPECIES_TROPIUS (344)
+    {99, 68, 83, 51, 72, 87, Type::Grass, Type::Flying, {ABILITY_CHLOROPHYLL, ABILITY_NONE}, 127},
+    // SPECIES_WHISMUR (345)
+    {64, 51, 23, 28, 51, 23, Type::Normal, Type::Normal, {ABILITY_SOUNDPROOF, ABILITY_NONE}, 127},
+    // SPECIES_LOUDRED (346)
+    {84, 71, 43, 48, 71, 43, Type::Normal, Type::Normal, {ABILITY_SOUNDPROOF, ABILITY_NONE}, 127},
+    // SPECIES_EXPLOUD (347)
+    {104, 91, 63, 68, 91, 63, Type::Normal, Type::Normal, {ABILITY_SOUNDPROOF, ABILITY_NONE}, 127},
+    // SPECIES_CLAMPERL (348)
+    {35, 64, 85, 32, 74, 55, Type::Water, Type::Water, {ABILITY_SHELL_ARMOR, ABILITY_NONE}, 127},
+    // SPECIES_HUNTAIL (349)
+    {55, 104, 105, 52, 94, 75, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_GOREBYSS (350)
+    {55, 84, 105, 52, 114, 75, Type::Water, Type::Water, {ABILITY_SWIFT_SWIM, ABILITY_NONE}, 127},
+    // SPECIES_ABSOL (351)
+    {65, 130, 60, 75, 75, 60, Type::Dark, Type::Dark, {ABILITY_PRESSURE, ABILITY_NONE}, 127},
+    // SPECIES_SHUPPET (352)
+    {44, 75, 35, 45, 63, 33, Type::Ghost, Type::Ghost, {ABILITY_INSOMNIA, ABILITY_NONE}, 127},
+    // SPECIES_BANETTE (353)
+    {64, 115, 65, 65, 83, 63, Type::Ghost, Type::Ghost, {ABILITY_INSOMNIA, ABILITY_NONE}, 127},
+    // SPECIES_SEVIPER (354)
+    {73, 100, 60, 65, 100, 60, Type::Poison, Type::Poison, {ABILITY_SHED_SKIN, ABILITY_NONE}, 127},
+    // SPECIES_ZANGOOSE (355)
+    {73, 115, 60, 90, 60, 60, Type::Normal, Type::Normal, {ABILITY_IMMUNITY, ABILITY_NONE}, 127},
+    // SPECIES_RELICANTH (356)
+    {100, 90, 130, 55, 45, 65, Type::Water, Type::Rock, {ABILITY_SWIFT_SWIM, ABILITY_ROCK_HEAD}, 31},
+    // SPECIES_ARON (357)
+    {50, 70, 100, 30, 40, 40, Type::Steel, Type::Rock, {ABILITY_STURDY, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_LAIRON (358)
+    {60, 90, 140, 40, 50, 50, Type::Steel, Type::Rock, {ABILITY_STURDY, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_AGGRON (359)
+    {70, 110, 180, 50, 60, 60, Type::Steel, Type::Rock, {ABILITY_STURDY, ABILITY_ROCK_HEAD}, 127},
+    // SPECIES_CASTFORM (360)
+    {70, 70, 70, 70, 70, 70, Type::Normal, Type::Normal, {ABILITY_FORECAST, ABILITY_NONE}, 127},
+    // SPECIES_VOLBEAT (361)
+    {65, 73, 55, 85, 47, 75, Type::Bug, Type::Bug, {ABILITY_ILLUMINATE, ABILITY_SWARM}, 0},
+    // SPECIES_ILLUMISE (362)
+    {65, 47, 55, 85, 73, 75, Type::Bug, Type::Bug, {ABILITY_OBLIVIOUS, ABILITY_NONE}, 254},
+    // SPECIES_LILEEP (363)
+    {66, 41, 77, 23, 61, 87, Type::Rock, Type::Grass, {ABILITY_SUCTION_CUPS, ABILITY_NONE}, 31},
+    // SPECIES_CRADILY (364)
+    {86, 81, 97, 43, 81, 107, Type::Rock, Type::Grass, {ABILITY_SUCTION_CUPS, ABILITY_NONE}, 31},
+    // SPECIES_ANORITH (365)
+    {45, 95, 50, 75, 40, 50, Type::Rock, Type::Bug, {ABILITY_BATTLE_ARMOR, ABILITY_NONE}, 31},
+    // SPECIES_ARMALDO (366)
+    {75, 125, 100, 45, 70, 80, Type::Rock, Type::Bug, {ABILITY_BATTLE_ARMOR, ABILITY_NONE}, 31},
+    // SPECIES_RALTS (367)
+    {28, 25, 25, 40, 45, 35, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_TRACE}, 127},
+    // SPECIES_KIRLIA (368)
+    {38, 35, 35, 50, 65, 55, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_TRACE}, 127},
+    // SPECIES_GARDEVOIR (369)
+    {68, 65, 65, 80, 125, 115, Type::Psychic, Type::Psychic, {ABILITY_SYNCHRONIZE, ABILITY_TRACE}, 127},
+    // SPECIES_BAGON (370)
+    {45, 75, 60, 50, 40, 30, Type::Dragon, Type::Dragon, {ABILITY_ROCK_HEAD, ABILITY_NONE}, 127},
+    // SPECIES_SHELGON (371)
+    {65, 95, 100, 50, 60, 50, Type::Dragon, Type::Dragon, {ABILITY_ROCK_HEAD, ABILITY_NONE}, 127},
+    // SPECIES_SALAMENCE (372)
+    {95, 135, 80, 100, 110, 80, Type::Dragon, Type::Flying, {ABILITY_INTIMIDATE, ABILITY_NONE}, 127},
+    // SPECIES_BELDUM (373)
+    {40, 55, 80, 30, 35, 60, Type::Steel, Type::Psychic, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_METANG (374)
+    {60, 75, 100, 50, 55, 80, Type::Steel, Type::Psychic, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_METAGROSS (375)
+    {80, 135, 130, 70, 95, 90, Type::Steel, Type::Psychic, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_REGIROCK (376)
+    {80, 100, 200, 50, 50, 100, Type::Rock, Type::Rock, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_REGICE (377)
+    {80, 50, 100, 50, 100, 200, Type::Ice, Type::Ice, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_REGISTEEL (378)
+    {80, 75, 150, 50, 75, 150, Type::Steel, Type::Steel, {ABILITY_CLEAR_BODY, ABILITY_NONE}, 255},
+    // SPECIES_KYOGRE (379)
+    {100, 100, 90, 90, 150, 140, Type::Water, Type::Water, {ABILITY_DRIZZLE, ABILITY_NONE}, 255},
+    // SPECIES_GROUDON (380)
+    {100, 150, 140, 90, 100, 90, Type::Ground, Type::Ground, {ABILITY_DROUGHT, ABILITY_NONE}, 255},
+    // SPECIES_RAYQUAZA (381)
+    {105, 150, 90, 95, 150, 90, Type::Dragon, Type::Flying, {ABILITY_AIR_LOCK, ABILITY_NONE}, 255},
+    // SPECIES_LATIAS (382)
+    {80, 80, 90, 110, 110, 130, Type::Dragon, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 254},
+    // SPECIES_LATIOS (383)
+    {80, 90, 80, 110, 130, 110, Type::Dragon, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 0},
+    // SPECIES_JIRACHI (384)
+    {100, 100, 100, 100, 100, 100, Type::Steel, Type::Psychic, {ABILITY_SERENE_GRACE, ABILITY_NONE}, 255},
+    // SPECIES_DEOXYS (385)
+    {50, 150, 50, 150, 150, 50, Type::Psychic, Type::Psychic, {ABILITY_PRESSURE, ABILITY_NONE}, 255},
+    // SPECIES_CHIMECHO (386)
+    {65, 50, 70, 65, 95, 80, Type::Psychic, Type::Psychic, {ABILITY_LEVITATE, ABILITY_NONE}, 127},
+};
+
+const SpeciesData& getSpeciesData(uint16_t speciesId) {
+    if (speciesId >= 387) return SPECIES_DATA[0];
+    return SPECIES_DATA[speciesId];
+}
+
+}  // namespace pkmn

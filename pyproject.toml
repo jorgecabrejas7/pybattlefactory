@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools", "wheel", "cmake", "pybind11"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pybattle"
+version = "0.1.0"
+description = "Fast Pokemon Battle Simulator with Gymnasium Integration"
+authors = [
+    {name = "Apollo", email = "jorgecabrejas7@gmail.com"},
+]
+license = {file = "LICENSE"}
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "gymnasium",
+    "numpy",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: C++",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Development Status :: 3 - Alpha",
+]
+
+[project.urls]
+Homepage = "https://github.com/jorgecabrejas7/pybattlefactory"
+Repository = "https://github.com/jorgecabrejas7/pybattlefactory"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pybattle"]

@@ -1,0 +1,117 @@
+Metadata-Version: 2.4
+Name: pybattle
+Version: 0.1.0
+Summary: Fast Pokemon Battle Simulator with Gymnasium Integration
+Author-email: Apollo <apollo@example.com>
+License: MIT License
+        
+        Copyright (c) 2026
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/your-username/pybattlefactory
+Project-URL: Repository, https://github.com/your-username/pybattlefactory
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: C++
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Topic :: Scientific/Engineering :: Artificial Intelligence
+Classifier: Development Status :: 3 - Alpha
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: gymnasium
+Requires-Dist: numpy
+Dynamic: license-file
+
+# PyBattle: Pokemon Emerald Battle Simulator
+
+A high-performance C++ Pokemon battle simulator with Python bindings and Gymnasium integration, optimized for Reinforcement Learning.
+
+## Features
+
+- **Fast & Parallelizable**: Core logic implemented in C++ for maximum throughput.
+- **Accurate Mechanics**: Faithful replication of Gen 3 (Emerald) battle logic, AI scripts, and RNG.
+- **Gymnasium Ready**: Includes standard `gym.Env` wrappers for combat and Hierarchical RL.
+- **Battle Factory Focused**: Specialized support for Battle Factory challenge cycles (Rental, Battle, Swap).
+- **Hierarchical RL Support**: Built-in phase management and action masking for multi-agent systems.
+
+## Installation
+
+### Prerequisites
+
+- C++17 compatible compiler (GCC, Clang, or MSVC)
+- CMake 3.16+
+- Python 3.8+
+
+### Install from Source
+
+```bash
+git clone https://github.com/your-username/pokeemerald-simulator.git
+cd pokeemerald-simulator/simulator
+pip install .
+```
+
+For development:
+```bash
+pip install -e .
+```
+
+## Usage
+
+### Standard Combat Environment
+
+```python
+import pybattle
+import gymnasium as gym
+
+env = pybattle.PokemonEnv(challenge_num=0, is_open_level=True, seed=42)
+obs, info = env.reset()
+
+action = env.action_space.sample()
+obs, reward, terminated, truncated, info = env.step(action)
+```
+
+### Hierarchical Battle Factory Environment (HRL)
+
+```python
+from pybattle import FactoryHRL_Env, FactoryPhase
+
+env = FactoryHRL_Env(challenge_num=0, is_open_level=True)
+obs, info = env.reset()
+
+# The environment handles:
+# 1. RENTAL Phase (picking lead team)
+# 2. BATTLE Phase (turn-by-turn combat)
+# 3. SWAP Phase (exchanging team members after a victory)
+
+phase = obs[0] # FactoryPhase.RENTAL
+mask = obs[80:100] # Legal action mask
+```
+
+## Project Structure
+
+- `src/`: C++ Core simulator source code.
+- `include/`: C++ Header files.
+- `pybattle/`: Python package source and Gymnasium wrappers.
+- `tests/`: C++ unit tests for battle logic and AI.
+
+## License
+
+MIT
