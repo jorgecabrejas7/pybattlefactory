@@ -144,10 +144,13 @@ class FactoryHRL_Env(gym.Env):
 
     def _start_battle(self):
         # Generate opponent team
+        # Pass player team species to exclude them
+        player_species = [p.species for p in self.player_team]
         self.opponent_team = self.factory.generate_opponent_team(
             self.challenge_num, 
             self.current_battle + 1, 
-            self.is_open_level
+            self.is_open_level,
+            player_species
         )
         
         # Reset engine

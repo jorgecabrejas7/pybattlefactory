@@ -4,9 +4,6 @@ MANIFEST.in
 README.md
 pyproject.toml
 setup.py
-./pybattle/__init__.py
-./pybattle/factory_hrl_env.py
-./pybattle/pkmn_env.py
 include/ai.hpp
 include/ai_context.hpp
 include/ai_scripts.hpp

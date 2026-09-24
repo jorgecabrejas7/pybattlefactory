@@ -53,10 +53,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/apollo/Dev/pokeemerald/simulator
+CMAKE_SOURCE_DIR = /home/apollo/Dev/pybattlefactory
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/apollo/Dev/pokeemerald/simulator/build
+CMAKE_BINARY_DIR = /home/apollo/Dev/pybattlefactory/build
 
 # Include any dependencies generated for this target.
 include CMakeFiles/battle_sim.dir/depend.make
@@ -70,172 +70,172 @@ include CMakeFiles/battle_sim.dir/progress.make
 include CMakeFiles/battle_sim.dir/flags.make
 
 CMakeFiles/battle_sim.dir/src/types.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/types.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/types.cpp
+CMakeFiles/battle_sim.dir/src/types.cpp.o: /home/apollo/Dev/pybattlefactory/src/types.cpp
 CMakeFiles/battle_sim.dir/src/types.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/battle_sim.dir/src/types.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/types.cpp.o -MF CMakeFiles/battle_sim.dir/src/types.cpp.o.d -o CMakeFiles/battle_sim.dir/src/types.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/types.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building CXX object CMakeFiles/battle_sim.dir/src/types.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/types.cpp.o -MF CMakeFiles/battle_sim.dir/src/types.cpp.o.d -o CMakeFiles/battle_sim.dir/src/types.cpp.o -c /home/apollo/Dev/pybattlefactory/src/types.cpp
 
 CMakeFiles/battle_sim.dir/src/types.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/types.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/types.cpp > CMakeFiles/battle_sim.dir/src/types.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/types.cpp > CMakeFiles/battle_sim.dir/src/types.cpp.i
 
 CMakeFiles/battle_sim.dir/src/types.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/types.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/types.cpp -o CMakeFiles/battle_sim.dir/src/types.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/types.cpp -o CMakeFiles/battle_sim.dir/src/types.cpp.s
 
 CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp
+CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o: /home/apollo/Dev/pybattlefactory/src/battle_engine.cpp
 CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o -MF CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o.d -o CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building CXX object CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o -MF CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o.d -o CMakeFiles/battle_sim.dir/src/battle_engine.cpp.o -c /home/apollo/Dev/pybattlefactory/src/battle_engine.cpp
 
 CMakeFiles/battle_sim.dir/src/battle_engine.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/battle_engine.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp > CMakeFiles/battle_sim.dir/src/battle_engine.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/battle_engine.cpp > CMakeFiles/battle_sim.dir/src/battle_engine.cpp.i
 
 CMakeFiles/battle_sim.dir/src/battle_engine.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/battle_engine.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/battle_engine.cpp -o CMakeFiles/battle_sim.dir/src/battle_engine.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/battle_engine.cpp -o CMakeFiles/battle_sim.dir/src/battle_engine.cpp.s
 
 CMakeFiles/battle_sim.dir/src/damage.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/damage.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/damage.cpp
+CMakeFiles/battle_sim.dir/src/damage.cpp.o: /home/apollo/Dev/pybattlefactory/src/damage.cpp
 CMakeFiles/battle_sim.dir/src/damage.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/battle_sim.dir/src/damage.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/damage.cpp.o -MF CMakeFiles/battle_sim.dir/src/damage.cpp.o.d -o CMakeFiles/battle_sim.dir/src/damage.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/damage.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building CXX object CMakeFiles/battle_sim.dir/src/damage.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/damage.cpp.o -MF CMakeFiles/battle_sim.dir/src/damage.cpp.o.d -o CMakeFiles/battle_sim.dir/src/damage.cpp.o -c /home/apollo/Dev/pybattlefactory/src/damage.cpp
 
 CMakeFiles/battle_sim.dir/src/damage.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/damage.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/damage.cpp > CMakeFiles/battle_sim.dir/src/damage.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/damage.cpp > CMakeFiles/battle_sim.dir/src/damage.cpp.i
 
 CMakeFiles/battle_sim.dir/src/damage.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/damage.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/damage.cpp -o CMakeFiles/battle_sim.dir/src/damage.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/damage.cpp -o CMakeFiles/battle_sim.dir/src/damage.cpp.s
 
 CMakeFiles/battle_sim.dir/src/ai.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/ai.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/ai.cpp
+CMakeFiles/battle_sim.dir/src/ai.cpp.o: /home/apollo/Dev/pybattlefactory/src/ai.cpp
 CMakeFiles/battle_sim.dir/src/ai.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/battle_sim.dir/src/ai.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building CXX object CMakeFiles/battle_sim.dir/src/ai.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai.cpp.o -c /home/apollo/Dev/pybattlefactory/src/ai.cpp
 
 CMakeFiles/battle_sim.dir/src/ai.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/ai.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/ai.cpp > CMakeFiles/battle_sim.dir/src/ai.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/ai.cpp > CMakeFiles/battle_sim.dir/src/ai.cpp.i
 
 CMakeFiles/battle_sim.dir/src/ai.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/ai.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/ai.cpp -o CMakeFiles/battle_sim.dir/src/ai.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/ai.cpp -o CMakeFiles/battle_sim.dir/src/ai.cpp.s
 
 CMakeFiles/battle_sim.dir/src/ai_context.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/ai_context.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp
+CMakeFiles/battle_sim.dir/src/ai_context.cpp.o: /home/apollo/Dev/pybattlefactory/src/ai_context.cpp
 CMakeFiles/battle_sim.dir/src/ai_context.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_context.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_context.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_context.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_context.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_context.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_context.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_context.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_context.cpp.o -c /home/apollo/Dev/pybattlefactory/src/ai_context.cpp
 
 CMakeFiles/battle_sim.dir/src/ai_context.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/ai_context.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp > CMakeFiles/battle_sim.dir/src/ai_context.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/ai_context.cpp > CMakeFiles/battle_sim.dir/src/ai_context.cpp.i
 
 CMakeFiles/battle_sim.dir/src/ai_context.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/ai_context.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/ai_context.cpp -o CMakeFiles/battle_sim.dir/src/ai_context.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/ai_context.cpp -o CMakeFiles/battle_sim.dir/src/ai_context.cpp.s
 
 CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp
+CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o: /home/apollo/Dev/pybattlefactory/src/ai_vm.cpp
 CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_vm.cpp.o -c /home/apollo/Dev/pybattlefactory/src/ai_vm.cpp
 
 CMakeFiles/battle_sim.dir/src/ai_vm.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/ai_vm.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp > CMakeFiles/battle_sim.dir/src/ai_vm.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/ai_vm.cpp > CMakeFiles/battle_sim.dir/src/ai_vm.cpp.i
 
 CMakeFiles/battle_sim.dir/src/ai_vm.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/ai_vm.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/ai_vm.cpp -o CMakeFiles/battle_sim.dir/src/ai_vm.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/ai_vm.cpp -o CMakeFiles/battle_sim.dir/src/ai_vm.cpp.s
 
 CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp
+CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o: /home/apollo/Dev/pybattlefactory/src/ai_scripts.cpp
 CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building CXX object CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o -MF CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o.d -o CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.o -c /home/apollo/Dev/pybattlefactory/src/ai_scripts.cpp
 
 CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp > CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/ai_scripts.cpp > CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.i
 
 CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/ai_scripts.cpp -o CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/ai_scripts.cpp -o CMakeFiles/battle_sim.dir/src/ai_scripts.cpp.s
 
 CMakeFiles/battle_sim.dir/src/factory.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/factory.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/factory.cpp
+CMakeFiles/battle_sim.dir/src/factory.cpp.o: /home/apollo/Dev/pybattlefactory/src/factory.cpp
 CMakeFiles/battle_sim.dir/src/factory.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/battle_sim.dir/src/factory.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/factory.cpp.o -MF CMakeFiles/battle_sim.dir/src/factory.cpp.o.d -o CMakeFiles/battle_sim.dir/src/factory.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/factory.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building CXX object CMakeFiles/battle_sim.dir/src/factory.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/factory.cpp.o -MF CMakeFiles/battle_sim.dir/src/factory.cpp.o.d -o CMakeFiles/battle_sim.dir/src/factory.cpp.o -c /home/apollo/Dev/pybattlefactory/src/factory.cpp
 
 CMakeFiles/battle_sim.dir/src/factory.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/factory.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/factory.cpp > CMakeFiles/battle_sim.dir/src/factory.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/factory.cpp > CMakeFiles/battle_sim.dir/src/factory.cpp.i
 
 CMakeFiles/battle_sim.dir/src/factory.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/factory.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/factory.cpp -o CMakeFiles/battle_sim.dir/src/factory.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/factory.cpp -o CMakeFiles/battle_sim.dir/src/factory.cpp.s
 
 CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp
+CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o: /home/apollo/Dev/pybattlefactory/src/data/species_data.cpp
 CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building CXX object CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/species_data.cpp.o -c /home/apollo/Dev/pybattlefactory/src/data/species_data.cpp
 
 CMakeFiles/battle_sim.dir/src/data/species_data.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/data/species_data.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp > CMakeFiles/battle_sim.dir/src/data/species_data.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/data/species_data.cpp > CMakeFiles/battle_sim.dir/src/data/species_data.cpp.i
 
 CMakeFiles/battle_sim.dir/src/data/species_data.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/data/species_data.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/data/species_data.cpp -o CMakeFiles/battle_sim.dir/src/data/species_data.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/data/species_data.cpp -o CMakeFiles/battle_sim.dir/src/data/species_data.cpp.s
 
 CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp
+CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o: /home/apollo/Dev/pybattlefactory/src/data/move_data.cpp
 CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building CXX object CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/move_data.cpp.o -c /home/apollo/Dev/pybattlefactory/src/data/move_data.cpp
 
 CMakeFiles/battle_sim.dir/src/data/move_data.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/data/move_data.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp > CMakeFiles/battle_sim.dir/src/data/move_data.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/data/move_data.cpp > CMakeFiles/battle_sim.dir/src/data/move_data.cpp.i
 
 CMakeFiles/battle_sim.dir/src/data/move_data.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/data/move_data.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/data/move_data.cpp -o CMakeFiles/battle_sim.dir/src/data/move_data.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/data/move_data.cpp -o CMakeFiles/battle_sim.dir/src/data/move_data.cpp.s
 
 CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp
+CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o: /home/apollo/Dev/pybattlefactory/src/data/type_chart.cpp
 CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building CXX object CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o -c /home/apollo/Dev/pybattlefactory/src/data/type_chart.cpp
 
 CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp > CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/data/type_chart.cpp > CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.i
 
 CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/data/type_chart.cpp -o CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/data/type_chart.cpp -o CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.s
 
 CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o: CMakeFiles/battle_sim.dir/flags.make
-CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o: /home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp
+CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o: /home/apollo/Dev/pybattlefactory/src/data/frontier_mons.cpp
 CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o: CMakeFiles/battle_sim.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o -c /home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building CXX object CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o"
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -MD -MT CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o -MF CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o.d -o CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o -c /home/apollo/Dev/pybattlefactory/src/data/frontier_mons.cpp
 
 CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.i: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing CXX source to CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.i"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp > CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.i
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -E /home/apollo/Dev/pybattlefactory/src/data/frontier_mons.cpp > CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.i
 
 CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling CXX source to assembly CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.s"
-	/usr/bin/c++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pokeemerald/simulator/src/data/frontier_mons.cpp -o CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.s
+	/usr/bin/g++ $(CXX_DEFINES) $(CXX_INCLUDES) $(CXX_FLAGS) -S /home/apollo/Dev/pybattlefactory/src/data/frontier_mons.cpp -o CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.s
 
 # Object files for target battle_sim
 battle_sim_OBJECTS = \
@@ -269,7 +269,7 @@ libbattle_sim.a: CMakeFiles/battle_sim.dir/src/data/type_chart.cpp.o
 libbattle_sim.a: CMakeFiles/battle_sim.dir/src/data/frontier_mons.cpp.o
 libbattle_sim.a: CMakeFiles/battle_sim.dir/build.make
 libbattle_sim.a: CMakeFiles/battle_sim.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Linking CXX static library libbattle_sim.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/home/apollo/Dev/pybattlefactory/build/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Linking CXX static library libbattle_sim.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/battle_sim.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/battle_sim.dir/link.txt --verbose=$(VERBOSE)
 
@@ -282,6 +282,6 @@ CMakeFiles/battle_sim.dir/clean:
 .PHONY : CMakeFiles/battle_sim.dir/clean
 
 CMakeFiles/battle_sim.dir/depend:
-	cd /home/apollo/Dev/pokeemerald/simulator/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/apollo/Dev/pokeemerald/simulator /home/apollo/Dev/pokeemerald/simulator /home/apollo/Dev/pokeemerald/simulator/build /home/apollo/Dev/pokeemerald/simulator/build /home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles/battle_sim.dir/DependInfo.cmake "--color=$(COLOR)"
+	cd /home/apollo/Dev/pybattlefactory/build && $(CMAKE_COMMAND) -E cmake_depends "Unix Makefiles" /home/apollo/Dev/pybattlefactory /home/apollo/Dev/pybattlefactory /home/apollo/Dev/pybattlefactory/build /home/apollo/Dev/pybattlefactory/build /home/apollo/Dev/pybattlefactory/build/CMakeFiles/battle_sim.dir/DependInfo.cmake "--color=$(COLOR)"
 .PHONY : CMakeFiles/battle_sim.dir/depend
 

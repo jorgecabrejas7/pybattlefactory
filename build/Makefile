@@ -57,10 +57,10 @@ RM = /usr/bin/cmake -E rm -f
 EQUALS = =
 
 # The top-level source directory on which CMake was run.
-CMAKE_SOURCE_DIR = /home/apollo/Dev/pokeemerald/simulator
+CMAKE_SOURCE_DIR = /home/apollo/Dev/pybattlefactory
 
 # The top-level build directory on which CMake was run.
-CMAKE_BINARY_DIR = /home/apollo/Dev/pokeemerald/simulator/build
+CMAKE_BINARY_DIR = /home/apollo/Dev/pybattlefactory/build
 
 #=============================================================================
 # Targets provided globally by CMake.
@@ -97,9 +97,9 @@ rebuild_cache/fast: rebuild_cache
 
 # The main all target
 all: cmake_check_build_system
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles /home/apollo/Dev/pokeemerald/simulator/build//CMakeFiles/progress.marks
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/apollo/Dev/pybattlefactory/build/CMakeFiles /home/apollo/Dev/pybattlefactory/build//CMakeFiles/progress.marks
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 all
-	$(CMAKE_COMMAND) -E cmake_progress_start /home/apollo/Dev/pokeemerald/simulator/build/CMakeFiles 0
+	$(CMAKE_COMMAND) -E cmake_progress_start /home/apollo/Dev/pybattlefactory/build/CMakeFiles 0
 .PHONY : all
 
 # The main clean target
@@ -140,17 +140,17 @@ battle_sim/fast:
 .PHONY : battle_sim/fast
 
 #=============================================================================
-# Target rules for targets named pybattle
+# Target rules for targets named pybattle_native
 
 # Build rule for target.
-pybattle: cmake_check_build_system
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybattle
-.PHONY : pybattle
+pybattle_native: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 pybattle_native
+.PHONY : pybattle_native
 
 # fast build rule for target.
-pybattle/fast:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle.dir/build.make CMakeFiles/pybattle.dir/build
-.PHONY : pybattle/fast
+pybattle_native/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle_native.dir/build.make CMakeFiles/pybattle_native.dir/build
+.PHONY : pybattle_native/fast
 
 #=============================================================================
 # Target rules for targets named test_damage
@@ -190,6 +190,19 @@ test_factory: cmake_check_build_system
 test_factory/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_factory.dir/build.make CMakeFiles/test_factory.dir/build
 .PHONY : test_factory/fast
+
+#=============================================================================
+# Target rules for targets named test_items
+
+# Build rule for target.
+test_items: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 test_items
+.PHONY : test_items
+
+# fast build rule for target.
+test_items/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_items.dir/build.make CMakeFiles/test_items.dir/build
+.PHONY : test_items/fast
 
 #=============================================================================
 # Target rules for targets named test_ai
@@ -473,7 +486,7 @@ src/python/bindings.o: src/python/bindings.cpp.o
 
 # target to build an object file
 src/python/bindings.cpp.o:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle.dir/build.make CMakeFiles/pybattle.dir/src/python/bindings.cpp.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle_native.dir/build.make CMakeFiles/pybattle_native.dir/src/python/bindings.cpp.o
 .PHONY : src/python/bindings.cpp.o
 
 src/python/bindings.i: src/python/bindings.cpp.i
@@ -481,7 +494,7 @@ src/python/bindings.i: src/python/bindings.cpp.i
 
 # target to preprocess a source file
 src/python/bindings.cpp.i:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle.dir/build.make CMakeFiles/pybattle.dir/src/python/bindings.cpp.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle_native.dir/build.make CMakeFiles/pybattle_native.dir/src/python/bindings.cpp.i
 .PHONY : src/python/bindings.cpp.i
 
 src/python/bindings.s: src/python/bindings.cpp.s
@@ -489,7 +502,7 @@ src/python/bindings.s: src/python/bindings.cpp.s
 
 # target to generate assembly for a file
 src/python/bindings.cpp.s:
-	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle.dir/build.make CMakeFiles/pybattle.dir/src/python/bindings.cpp.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/pybattle_native.dir/build.make CMakeFiles/pybattle_native.dir/src/python/bindings.cpp.s
 .PHONY : src/python/bindings.cpp.s
 
 src/types.o: src/types.cpp.o
@@ -612,6 +625,30 @@ tests/test_factory.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_factory.dir/build.make CMakeFiles/test_factory.dir/tests/test_factory.cpp.s
 .PHONY : tests/test_factory.cpp.s
 
+tests/test_items.o: tests/test_items.cpp.o
+.PHONY : tests/test_items.o
+
+# target to build an object file
+tests/test_items.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_items.dir/build.make CMakeFiles/test_items.dir/tests/test_items.cpp.o
+.PHONY : tests/test_items.cpp.o
+
+tests/test_items.i: tests/test_items.cpp.i
+.PHONY : tests/test_items.i
+
+# target to preprocess a source file
+tests/test_items.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_items.dir/build.make CMakeFiles/test_items.dir/tests/test_items.cpp.i
+.PHONY : tests/test_items.cpp.i
+
+tests/test_items.s: tests/test_items.cpp.s
+.PHONY : tests/test_items.s
+
+# target to generate assembly for a file
+tests/test_items.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/test_items.dir/build.make CMakeFiles/test_items.dir/tests/test_items.cpp.s
+.PHONY : tests/test_items.cpp.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -622,11 +659,12 @@ help:
 	@echo "... rebuild_cache"
 	@echo "... test"
 	@echo "... battle_sim"
-	@echo "... pybattle"
+	@echo "... pybattle_native"
 	@echo "... test_ai"
 	@echo "... test_battle"
 	@echo "... test_damage"
 	@echo "... test_factory"
+	@echo "... test_items"
 	@echo "... src/ai.o"
 	@echo "... src/ai.i"
 	@echo "... src/ai.s"
@@ -678,6 +716,9 @@ help:
 	@echo "... tests/test_factory.o"
 	@echo "... tests/test_factory.i"
 	@echo "... tests/test_factory.s"
+	@echo "... tests/test_items.o"
+	@echo "... tests/test_items.i"
+	@echo "... tests/test_items.s"
 .PHONY : help
 
 

@@ -3,6 +3,7 @@
 #include "types.hpp"
 #include "data.hpp"
 #include <vector>
+#include <set>
 #include <cstdint>
 
 namespace pkmn {
@@ -17,6 +18,10 @@ public:
     // Returns indices into the FRONTIER_MONS array
     static std::vector<uint16_t> generateOpponentTeam(uint32_t& rngSeed, int challengeNum, int battleNum, bool isOpenLevel,
                                                       const std::vector<uint16_t>& playerExcludes = {});
+
+    // Overload taking explicit Species IDs to exclude
+    static std::vector<uint16_t> generateOpponentTeam(uint32_t& rngSeed, int challengeNum, int battleNum, bool isOpenLevel,
+                                                      const std::set<uint16_t>& excludedSpecies);
 
     // Convert a FrontierMon ID to a full Pokemon instance
     static Pokemon createPokemon(uint16_t frontierMonId, int level, uint8_t fixedIV = 31);

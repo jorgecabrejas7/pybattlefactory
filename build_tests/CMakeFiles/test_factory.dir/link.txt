@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/test_factory.dir/tests/test_factory.cpp.o -o test_factory  libbattle_sim.a 

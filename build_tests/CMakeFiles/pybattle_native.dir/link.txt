@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -static-libgcc -static-libstdc++ -flto -shared  -o pybattle_native.cpython-312-x86_64-linux-gnu.so CMakeFiles/pybattle_native.dir/src/python/bindings.cpp.o  libbattle_sim.a 

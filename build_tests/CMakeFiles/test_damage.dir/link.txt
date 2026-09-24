@@ -1,0 +1,1 @@
+/usr/bin/c++ CMakeFiles/test_damage.dir/tests/test_damage.cpp.o -o test_damage  libbattle_sim.a 

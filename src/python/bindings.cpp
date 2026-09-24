@@ -108,8 +108,11 @@ PYBIND11_MODULE(pybattle_native, m) {
         uint32_t seed;
         FactoryHelper(uint32_t s) : seed(s) {}
 
-        std::vector<Pokemon> generate_opponent_team(int challengeNum, int battleNum, bool isOpenLevel) {
-            auto monIds = FactoryGenerator::generateOpponentTeam(seed, challengeNum, battleNum, isOpenLevel);
+        std::vector<Pokemon> generate_opponent_team(int challengeNum, int battleNum, bool isOpenLevel, const std::vector<uint16_t>& player_team = {}) {
+            // Convert input vector (assumed Species IDs from Python) to Set
+            std::set<uint16_t> excludedSpecies(player_team.begin(), player_team.end());
+            
+            auto monIds = FactoryGenerator::generateOpponentTeam(seed, challengeNum, battleNum, isOpenLevel, excludedSpecies);
             std::vector<Pokemon> team;
             int level = isOpenLevel ? 100 : 50; 
             for (uint16_t id : monIds) {

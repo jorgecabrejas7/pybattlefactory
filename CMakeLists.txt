@@ -41,6 +41,7 @@ if(BUILD_PYTHON_BINDINGS)
 
     pybind11_add_module(pybattle_native src/python/bindings.cpp)
     target_link_libraries(pybattle_native PRIVATE battle_sim)
+    target_link_options(pybattle_native PRIVATE -static-libgcc -static-libstdc++)
 endif()
 
 # Tests
@@ -58,6 +59,10 @@ if(BUILD_TESTS)
     add_executable(test_factory tests/test_factory.cpp)
     target_link_libraries(test_factory battle_sim)
     add_test(NAME FactoryTests COMMAND test_factory)
+
+    add_executable(test_items tests/test_items.cpp)
+    target_link_libraries(test_items battle_sim)
+    add_test(NAME ItemTests COMMAND test_items)
 
     add_executable(test_ai tests/test_ai.cpp)
     target_link_libraries(test_ai battle_sim)

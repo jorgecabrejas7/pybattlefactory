@@ -111,6 +111,35 @@ std::vector<uint16_t> FactoryGenerator::generateOpponentTeam(uint32_t& rngSeed, 
     return team;
 }
 
+std::vector<uint16_t> FactoryGenerator::generateOpponentTeam(uint32_t& rngSeed, int challengeNum, int /*battleNum*/, bool isOpenLevel,
+                                                  const std::set<uint16_t>& excludedSpecies) {
+    uint16_t start, end;
+    getChallengeRanges(challengeNum, isOpenLevel, start, end);
+    
+    std::vector<uint16_t> team;
+    std::set<uint16_t> usedSpecies = excludedSpecies; // Copy initial exclusions
+    
+    int attempts = 0;
+    while (team.size() < 3 && attempts < 1000) {
+        attempts++;
+        uint16_t range = end - start + 1;
+        uint16_t id = start + (nextRandom(rngSeed) % range);
+        
+        const FrontierMon& mon = getFrontierMon(id);
+        if (usedSpecies.count(mon.species)) continue;
+        
+        // Also check if id is clearly duplicate in team
+        bool idExists = false;
+        for (uint16_t existing : team) if (existing == id) idExists = true;
+        if (idExists) continue;
+
+        team.push_back(id);
+        usedSpecies.insert(mon.species);
+    }
+    
+    return team;
+}
+
 Pokemon FactoryGenerator::createPokemon(uint16_t frontierMonId, int level, uint8_t fixedIV) {
     const FrontierMon& fm = getFrontierMon(frontierMonId);
     Pokemon mon{};

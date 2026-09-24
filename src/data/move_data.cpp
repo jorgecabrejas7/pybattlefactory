@@ -261,7 +261,7 @@ static const MoveData MOVE_DATA[] = {
     // MOVE_SLUDGE (124)
     {65, 100, 20, Type::Poison, MoveEffect::POISON_HIT, 30, 0, false, false},
     // MOVE_BONE_CLUB (125)
-    {65, 85, 20, Type::Ground, MoveEffect::FLINCH_HIT, 10, 0, false, false},
+    {65, 85, 20, Type::Ground, MoveEffect::FLINCH_HIT, 10, 0, true, false},
     // MOVE_FIRE_BLAST (126)
     {120, 85, 5, Type::Fire, MoveEffect::BURN_HIT, 10, 0, false, false},
     // MOVE_WATERFALL (127)

@@ -4,19 +4,19 @@
 cmake_minimum_required(VERSION 3.5)
 
 file(MAKE_DIRECTORY
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-src"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-build"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/tmp"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src"
-  "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-src"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-build"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/tmp"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src"
+  "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp"
 )
 
 set(configSubDirs )
 foreach(subDir IN LISTS configSubDirs)
-    file(MAKE_DIRECTORY "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp/${subDir}")
+    file(MAKE_DIRECTORY "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp/${subDir}")
 endforeach()
 if(cfgdir)
-  file(MAKE_DIRECTORY "/home/apollo/Dev/pokeemerald/simulator/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp${cfgdir}") # cfgdir has leading slash
+  file(MAKE_DIRECTORY "/home/apollo/Dev/pybattlefactory/build/_deps/pybind11-subbuild/pybind11-populate-prefix/src/pybind11-populate-stamp${cfgdir}") # cfgdir has leading slash
 endif()

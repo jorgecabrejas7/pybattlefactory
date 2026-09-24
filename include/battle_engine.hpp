@@ -64,6 +64,15 @@ public:
     /// Get type effectiveness multiplier (0, 0.25, 0.5, 1, 2, 4)
     float getTypeEffectiveness(Type attackType, Type defType1, Type defType2);
     
+    // Mechanics Hooks
+    int getModifiedSpeed(uint8_t side);
+    bool checkAbility(uint8_t side, uint8_t abilityId);
+    bool checkItem(uint8_t side, uint16_t itemId);
+    
+    void onEnterBattle(uint8_t side);
+    void onSwitchIn(uint8_t side);
+    void onFaint(uint8_t side);
+    
     /// Get current turn count
     uint16_t getTurnCount() const { return m_state.turnNumber; }
     
@@ -72,7 +81,9 @@ private:
     
     // Internal turn execution
     void executeTurn(Action playerAction, Action opponentAction);
-    void executeMove(uint8_t attacker, uint8_t defender, uint16_t moveId);
+    void executeMove(uint8_t attacker, uint8_t defender, uint16_t moveId, bool ignoreChecks = false);
+    void applyMoveEffect(uint8_t attacker, uint8_t defender, uint16_t moveId, int damageDealt);
+    bool applyStatChange(uint8_t target, BattleStat stat, int8_t delta);
     void executeSwitch(uint8_t side, uint8_t newPartyIndex);
     void applyEndOfTurnEffects();
     

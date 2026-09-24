@@ -225,14 +225,60 @@ struct ActiveMon {
     bool isSeeded;      // Leech Seed
     bool hasSubstitute;
     uint8_t substituteHP;
+
+    // Additional Volatile Status
+    bool isFlinched;
+    bool isEncored;
+    uint8_t encoreTurns;
+    uint16_t encoredMove;
+    bool isInfatuated; // Attract
+    uint8_t infatuationSource; // bitmask or side?
+    bool isCursed; // Ghost Curse
+    bool isNightmare;
+    
+    // Counters
+    uint8_t toxicCounter; // For Bad Poison damage calculation
+    uint8_t sleepCounter; // For Sleep Talk / Snore / Wake up
+    uint8_t stockPileCount; 
+    
+    // Move History / Locking
+    uint16_t lastMoveUsed;
+    uint16_t lastMoveTarget; // For Counter/Mirror Coat
+    uint16_t choiceLockedMove; // For Choice Band/Specs/Scarf
     
     // Protect/Detect tracking
+    bool isProtected;
     uint8_t protectUses;  // For diminishing returns
     bool protectedThisTurn;
+    bool enduredThisTurn; // Endure
+    
+    // Multi-Turn statuses
+    bool isRecharging;      // Hyper Beam
+    bool isCharging;        // Solar Beam / Skull Bash
+    uint16_t chargingMove;  // The move being charged
+    bool isInvulnerable;    // Fly / Dig
+    uint16_t invulnerableMove; // To distinguish Fly vs Dig vs Dive
+    bool isLockedIntoMove;  // Thrash / Outrage / Petal Dance
+    uint8_t lockedMoveTurns;
+    bool isTrapped; // Mean Look / Spider Web / Arena Trap
+    
+    // Damage History (Counter/Mirror Coat)
+    int lastDamageTaken;
+    uint16_t lastMoveTaken;
+    
+    // Transform
+    bool isTransformed;
+    uint16_t originalSpecies;
+    
+    // Baton Pass
+    bool batonPassing;
     
     // Type changes
     Type types[2];
     bool typesOverridden;
+    
+    // Ability Activation Flags (e.g. Flash Fire active)
+    bool isFlashFireActive;
     
     void reset();
 };

@@ -33,9 +33,30 @@ void ActiveMon::reset() {
     isSeeded = false;
     hasSubstitute = false;
     substituteHP = 0;
+
+    isFlinched = false;
+    isEncored = false;
+    encoreTurns = 0;
+    encoredMove = 0;
+    isInfatuated = false;
+    infatuationSource = 0;
+    isCursed = false;
+    isNightmare = false;
+    
+    toxicCounter = 0;
+    sleepCounter = 0;
+    stockPileCount = 0;
+    
+    lastMoveUsed = 0;
+    lastMoveTarget = 0;
+    choiceLockedMove = 0;
+
     protectUses = 0;
     protectedThisTurn = false;
+    enduredThisTurn = false;
+    
     typesOverridden = false;
+    isFlashFireActive = false;
 }
 
 uint8_t BattleState::countRemaining(uint8_t side) const {

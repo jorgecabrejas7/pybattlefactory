@@ -825,7 +825,9 @@ enum : uint16_t {
     ITEM_AGUAV_BERRY = 56,
     ITEM_MAGO_BERRY = 57,
     ITEM_LAX_INCENSE = 58,
-    ITEM_COUNT = 63  // ~59-62 are duplicates in the table, not used
+    ITEM_THICK_CLUB = 59,
+    ITEM_METAL_POWDER = 60,
+    ITEM_COUNT = 65 
 };
 
 
