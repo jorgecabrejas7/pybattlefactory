@@ -116,7 +116,14 @@ def test_opponent_knowledge_matches_the_games_generation():
         assert k is not None and k.challenge == info.challenge_num and k.noland == info.noland
         party = decode_party(b.game.read(S.addr("gEnemyParty"), 300))[:3]
         ids = D.factory_pool(k, b.open_level)
+        # the IV the sampler gives its drawn sets is the one the game gave the real team
+        iv = D.fixed_iv(k.challenge + 2, False) if k.noland else D.fixed_iv(0, k.battle == 6)
+        assert k.battle == info.battle_in_challenge
+        assert all(m.ivs == [iv] * 6 for m in party), ([m.ivs for m in party], iv, k)
         if not k.noland:
+            for i, m in zip(_true_ids(b), party):      # and the set's EVs and nature are the ones the game used
+                spec = D.set_spec(0, i, iv)
+                assert m.evs == spec[5] and m.nature == spec[6], (i, m.evs, spec[5])
             real = _true_ids(b)
             assert [int(D.SET_SPECIES[i]) for i in real] == [m.species for m in party]
             assert all(i in ids for i in real), (real, k)
@@ -157,7 +164,7 @@ def test_factory_sets_sampler_respects_what_the_player_saw(training):
             if m.seen and m.fainted:
                 assert sp == D.KEEP
                 continue
-            assert all(0 <= x <= 31 for x in ivs) and all(0 <= x <= 252 for x in evs) and sum(evs) <= 510
+            assert all(0 <= x <= 31 for x in ivs) and all(0 <= x <= 510 for x in evs) and sum(evs) <= 510
             assert 0 <= nature < 25 and bit in (0, 1)
             sets = [i for i in pool if int(D.SET_SPECIES[i]) == sp and list(D.SET_MOVES_AS_BUILT[i]) == moves
                     and int(D.SET_ITEM[i]) == item]
@@ -170,6 +177,8 @@ def test_factory_sets_sampler_respects_what_the_player_saw(training):
                 assert hp_bar_pixels(round(hp * mh), mh) == m.hp_pixels or m.hp_pixels >= 48
             else:
                 assert sets, "an unseen Pokemon is a set of the pool"
+                assert any(list(D.set_spec(0, i, ivs[0])[4:7]) == [ivs, evs, nature] for i in sets), \
+                    "built as the game builds the set (its EVs and nature, one IV for every stat)"
                 assert hp == 1.0
             species.append(sp)
             if item:

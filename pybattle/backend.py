@@ -70,11 +70,13 @@ class OpponentKnowledge:
         species     normal trainer: the species it cannot have (the 6 rentals shown at the rental screen, or our
                     team and the defeated team at the swap screen: frontier.rentalMons when it was generated)
         set_ids     Noland: the sets it cannot have (our team after the swap and the defeated team)
+        battle      the next battle's index in the challenge (0..6; the game's IV rule depends on it)
     The real opponent (gFrontierTempParty, gEnemyParty) is never read to build it."""
     challenge: int
     noland: bool = False
     species: FrozenSet[int] = frozenset()
     set_ids: FrozenSet[int] = frozenset()
+    battle: int = 0
 
 
 class FactoryBackend:
@@ -213,8 +215,10 @@ class SimBackend(FactoryBackend):
                 # picks, [3..5] keep the rentals shown there
                 ids = list(v.frontier_ids)
                 return OpponentKnowledge(info.challenge_num, True,
-                                         set_ids=frozenset([ids[i] for i in action] + ids[3:6]))
-            return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in v.candidates))
+                                         set_ids=frozenset([ids[i] for i in action] + ids[3:6]),
+                                         battle=info.battle_in_challenge)
+            return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in v.candidates),
+                                     battle=info.battle_in_challenge)
         if self.phase != Phase.SWAP:
             raise RuntimeError(f"not at a rental / swap decision: {self.phase}")
         if info.noland:
@@ -222,10 +226,12 @@ class SimBackend(FactoryBackend):
             own, foe = ids[:3], ids[3:6]
             if action is not None:
                 own[action[0]] = foe[action[1]]
-            return OpponentKnowledge(info.challenge_num, True, set_ids=frozenset(own + foe))
+            return OpponentKnowledge(info.challenge_num, True, set_ids=frozenset(own + foe),
+                                     battle=info.battle_in_challenge)
         own = decode_party(self.game.read(S.addr("gPlayerParty"), 300))[:3]
         foe = decode_party(self.game.read(S.addr("gEnemyParty"), 300))[:3]    # the defeated team (swap screen)
-        return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in own + foe))
+        return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in own + foe),
+                                 battle=info.battle_in_challenge)
 
     # --- actions ------------------------------------------------------------------------
 

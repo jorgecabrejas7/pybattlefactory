@@ -39,9 +39,10 @@ searches DURING TRAINING only (the battler's determinizations and the tactician'
 Pokemon are drawn from the Battle Factory's set list, the way the game draws them: the round's pool
 (sInitialRentalMonRanges; level 50 without the high tier; no Unown), no repeated species or held item in the team,
 the species on screen when the team was generated excluded (pybattle.backend.OpponentKnowledge; Noland: set ids
-excluded). A set gives species, moves and held item; the ability is the species' coin flip, as in the game; IVs
-(uniform 0-31), EVs (the random spread of _evs: the v4 assumption, any 0-252 per stat) and nature (uniform) are
-never taken from the set. Everything the player saw is kept: a seen Pokemon's set must contain its revealed moves
+excluded). A drawn set is built exactly as the game builds it: species, moves, held item, EV spread and nature from
+the set, every IV the game's value for that battle (fixed_iv; Noland's own row), the ability the species' coin flip.
+These are the search's model of the world only (decided 2026-09-25: the simulated opponents are real Factory
+opponents); they never enter the network's input. Everything the player saw is kept: a seen Pokemon's set must contain its revealed moves
 and item; HP inside its bar, statuses and hidden counters as above; a seen Pokemon no consistent set explains falls
 back to the strict draw. A player learns the sets by playing; the network input never contains them. Refused
 outside training (rl.search.in_training): evaluation and inference keep the strict sampler.
@@ -410,7 +411,7 @@ def sample_factory_sets(view, knowledge, rng=None, open_level=True):
                 moves, item = _strict_moves_item(m, level, used_items, rng)
                 if item:
                     used_items.add(item)
-                drawn[i] = (m.species, moves, item)
+                drawn[i] = (m.species, moves, item, None)
                 continue
         else:
             cand = _free(ids, used_species, used_items)
@@ -421,17 +422,20 @@ def sample_factory_sets(view, knowledge, rng=None, open_level=True):
         used_species.add(species)
         if item:
             used_items.add(item)
-        drawn[i] = (species, list(SET_MOVES_AS_BUILT[k]), item)
+        drawn[i] = (species, list(SET_MOVES_AS_BUILT[k]), item, k)
+    # the drawn sets are built as the game builds them: the set's EVs and nature, the game's IV for this battle
+    iv = fixed_iv(knowledge.challenge + 2, False) if knowledge.noland else fixed_iv(0, knowledge.battle == 6)
     specs = []
     for i, m in enumerate(enemy):
         d = drawn[i]
         if d is None:
             specs.append((i, KEEP, [0, 0, 0, 0], 0, [0] * 6, [0] * 6, 0, 0, -1.0))
             continue
-        species, moves, item = d
-        ivs = [rng.randrange(32) for _ in range(6)]
-        evs = _evs(rng)
-        nature = rng.randrange(NUM_NATURES)
+        species, moves, item, k = d
+        if k is None:                           # strict fallback (no set explains it): nothing to take from a set
+            ivs, evs, nature = [rng.randrange(32) for _ in range(6)], _evs(rng), rng.randrange(NUM_NATURES)
+        else:
+            _, _, _, _, ivs, evs, nature, _, _ = set_spec(i, k, iv)
         bit = _ability_bit(species, m if m.seen else None, rng)
         hp = _hp_fraction(max_hp_of(species, ivs[0], evs[0], level), m.hp_pixels, rng) if m.seen else 1.0
         specs.append((i, species, moves, item, ivs, evs, nature, bit, hp))

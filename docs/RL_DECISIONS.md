@@ -696,9 +696,12 @@ Definiciones, de abajo arriba:
   táctico) sortean los rivales de **la lista de sets de la Factory** (`--opponent-prior factory_sets`, el valor por
   defecto de `rl.alphazero`): el pool de la ronda, con las reglas de arriba, tomando del set la especie, los
   movimientos y el objeto; la habilidad es una moneda al aire entre las dos de la especie, como en el juego.
-  **Nunca** se toman del set los IVs, los EVs ni la naturaleza: IVs uniformes 0–31, EVs con el reparto aleatorio
-  legal de siempre (hasta 510 en total, hasta 252 por estadística: la misma suposición que las cotas de la
-  codificación v4) y naturaleza uniforme.
+  **Corrección del usuario (2026-09-25):** el rival simulado es un rival **real** de la Factory, construido como lo
+  construye el juego: también el reparto de EVs y la naturaleza del set, y el IV que el juego da a ese combate
+  (`fixed_iv`: 3, o 6 en el último combate de la ronda por el fallo de la Battle Tower; la fila propia de Noland).
+  La restricción de información es para **los modelos**, no para el simulador: IVs, EVs y naturaleza nunca entran en
+  la entrada de la red; solo forman parte del mundo que la búsqueda simula. (La primera versión los sorteaba al azar;
+  el test comprueba ahora que el IV, los EVs y la naturaleza de los sets sorteados son los del juego.)
 - Se mantiene todo lo que el jugador vio: especie, movimientos, objeto y habilidad revelados, la barra de PS, el
   estado, los rivales ya vistos, y las reglas estrictas de §15. Un Pokémon visto solo puede recibir sets compatibles
   con lo revelado (sus movimientos revelados incluidos en el set, su objeto revelado igual al del set); si ningún set
@@ -741,22 +744,18 @@ rachas, voraz, solo red). `scripts/diag_sim_opponents.py`.
 
 | Red | Ronda | Rival estricto | Rival `factory_sets` | Rival real | Real: victorias por combate (ronda entera) | Real: rondas completadas |
 |---|---|---|---|---|---|---|
-| v3 | 1 | 99,8 % | 94,5 % | 93,6 % | 94,6 % | 68,2 % |
-| v3 | 3 | 100,0 % | 91,2 % | 93,6 % | 88,5 % | 38,5 % |
-| v3 | 5 | 99,6 % | 80,3 % | 73,0 % | 78,1 % | 18,8 % |
-| sin entrenar | 1 | 56,8 % | 26,4 % | 26,2 % | 22,9 % | 0,0 % |
-| sin entrenar | 3 | 50,2 % | 17,0 % | 15,2 % | 15,4 % | 0,0 % |
-| sin entrenar | 5 | 52,3 % | 8,2 % | 8,6 % | 10,3 % | 0,0 % |
+| v3 | 1 | 100,0 % | 90,6 % | 94,1 % | 94,6 % | 68,2 % |
+| v3 | 3 | 100,0 % | 89,5 % | 91,8 % | 88,5 % | 38,5 % |
+| v3 | 5 | 99,6 % | 76,6 % | 73,8 % | 78,1 % | 18,8 % |
+| sin entrenar | 1 | 57,4 % | 16,8 % | 25,4 % | 22,9 % | 0,0 % |
+| sin entrenar | 3 | 51,2 % | 17,6 % | 15,6 % | 15,4 % | 0,0 % |
+| sin entrenar | 5 | 50,0 % | 7,4 % | 7,0 % | 10,3 % | 0,0 % |
 
-Porcentaje de victorias en el primer combate de la ronda (salvo las dos últimas columnas). El muestreador estricto da
-rivales tan débiles que v3 gana casi siempre (99,6–100 %) y una red sin entrenar gana la mitad; con `factory_sets`
-la tasa de victoria queda a pocos puntos de la del rival real (v3: 94,5 / 91,2 / 80,3 % frente a 93,6 / 93,6 / 73,0 %;
-sin entrenar: 26,4 / 17,0 / 8,2 % frente a 26,2 / 15,2 / 8,6 %). Los cortes por límite de decisiones son ≤ 0,8 %. La
-diferencia que queda en la ronda 5 (v3: 80,3 % frente a 73,0 %) es coherente con no tomar del set los EVs, los IVs ni
-la naturaleza: un set real reparte siempre 510 EVs en sus estadísticas buenas, con una naturaleza a juego, mientras
-que el sorteo reparte de media la mitad de EVs y al azar (los IVs juegan a favor del rival sorteado: por el fallo de
-la Factory que usa el reto de la Battle Tower, el rival real de estas rachas tiene IVs de 3, y el sorteado, 15,5 de
-media).
+Porcentaje de victorias en el primer combate de la ronda (salvo las dos últimas columnas), 256 combates por casilla
+(error típico ≈ ±2–3 puntos), con los sets completos (EVs, naturaleza e IV del juego). El muestreador estricto da
+rivales tan débiles que v3 gana casi siempre y una red sin entrenar la mitad; con `factory_sets` la tasa de victoria
+queda dentro de unos pocos puntos de la del rival real en todas las rondas (con EVs y naturaleza al azar, la primera
+versión daba en la ronda 5 un 80,3 % frente a 73,0 %: rivales algo más fáciles de lo real).
 
 **Pendiente de decidir** (elegido provisionalmente al implementar):
 - Tamaño de la iteración: 40.000 decisiones del combatiente (`--decisions-per-iter`) y 200 iteraciones planeadas.
