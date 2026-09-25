@@ -53,7 +53,9 @@ def parse():
     p.add_argument("--heads", type=int, default=4)
     p.add_argument("--save-every", type=int, default=20, help="battler updates between checkpoints")
     p.add_argument("--encode-version", type=int, default=3, help="2 = ppo_joint_v1/v2 layout; 3 = + damage/speed "
-                                                                   "estimates and round one-hot")
+                                                                   "estimates and round one-hot; 4 = estimates "
+                                                                   "without opponent IVs + defeated-opponent "
+                                                                   "records in the swap (docs §17)")
     p.add_argument("--share", default="embeddings", choices=("all", "embeddings"),
                    help="what the tactician shares with the battler")
     p.add_argument("--value-norm", type=int, default=1, help="normalize each agent's value targets")

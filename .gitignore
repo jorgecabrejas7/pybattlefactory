@@ -12,3 +12,4 @@ build-dbg/
 runs/
 watch_log.jsonl
 shot_*.png
+.claude/

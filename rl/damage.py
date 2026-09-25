@@ -1,11 +1,18 @@
-"""Approximate damage and speed estimates, as an experienced player would work them out (docs/RL_DECISIONS.md §14).
+"""Approximate damage and speed estimates, as an experienced player would work them out (docs/RL_DECISIONS.md §14,
+§17).
 
 The Gen 3 damage formula is public knowledge. Our own Pokemon's stats are known exactly. The opponent's are not:
-its species' base stats, level 100 and the Factory's fixed IVs for this round are known, but its EVs and nature
-are not. No Factory set is used; instead each hidden stat is bounded by the possible EVs (0-252) and natures
-(0.9-1.1), which gives a [min, max] range the way a player bounds a calculation. The random roll (85-100%)
-widens it further. Abilities and items are applied only when the player knows them (own Pokemon; the opponent's
-if revealed, or its species' only possible ability).
+its species' base stats and its level are known, but its IVs, EVs and nature are not. No Factory set is used;
+instead each hidden stat is bounded by the possible IVs (0-31), EVs (0-252) and natures (0.9-1.1), which gives a
+[min, max] range the way a player bounds a calculation. The random roll (85-100%) widens it further. Abilities
+and items are applied only when the player knows them (own Pokemon; the opponent's if revealed, or its species'
+only possible ability).
+
+Versions (the `version` argument, = rl.encode.VERSION when encoding):
+  3  what the v3 network was trained on, kept bit for bit: level 100 and the Factory's fixed IV table for the
+     round (FIXED_IVS, knowledge a player does not have), and Thick Club / Light Ball matched to the wrong
+     species (SP_CUBONE, SP_MAROWAK, SP_PIKACHU below are the three ids in id order: Pikachu, Cubone, Marowak);
+  4  the legal rule: any IV 0-31 at the level shown, and Thick Club for Cubone / Marowak, Light Ball for Pikachu.
 """
 
 import math
@@ -15,7 +22,7 @@ from .gamedata import MOVES, SPECIES, TYPE_EFFECTIVENESS, _DATA
 
 ITEMS = _DATA["items"]
 STAGE = _DATA["stat_stage_ratios"]            # [num, den] per stage -6..+6
-FIXED_IVS = _DATA["factory_fixed_ivs"]        # per challenge: [normal battles, 7th battle]
+FIXED_IVS = _DATA["factory_fixed_ivs"]        # per challenge: [normal battles, 7th battle] (v3 only)
 
 _E = {v: int(k) for k, v in NAMES["effects"].items()}
 _A = {v: int(k) for k, v in NAMES["abilities"].items()}
@@ -36,8 +43,13 @@ LEVITATE, WATER_ABSORB, VOLT_ABSORB, FLASH_FIRE, WONDER_GUARD, THICK_FAT, HUGE_P
     _A[f"ABILITY_{a}"] for a in ("LEVITATE", "WATER_ABSORB", "VOLT_ABSORB", "FLASH_FIRE", "WONDER_GUARD",
                                  "THICK_FAT", "HUGE_POWER", "PURE_POWER", "HUSTLE", "GUTS"))
 CHOICE_BAND, THICK_CLUB, LIGHT_BALL = _H["HOLD_EFFECT_CHOICE_BAND"], _H["HOLD_EFFECT_THICK_CLUB"], _H["HOLD_EFFECT_LIGHT_BALL"]
+# v3 quirk (kept for bit-exactness): assigned in id order, so these are really Pikachu, Cubone, Marowak
 SP_CUBONE, SP_MAROWAK, SP_PIKACHU = (int(k) for k, v in NAMES["species"].items()
                                      if v in ("SPECIES_CUBONE", "SPECIES_MAROWAK", "SPECIES_PIKACHU"))
+_SPECIES_ID = {v: int(k) for k, v in NAMES["species"].items()}
+# v4: by name
+THICK_CLUB_SPECIES = (_SPECIES_ID["SPECIES_CUBONE"], _SPECIES_ID["SPECIES_MAROWAK"])
+LIGHT_BALL_SPECIES = (_SPECIES_ID["SPECIES_PIKACHU"],)
 WEATHER_RAIN, WEATHER_SUN = 1, 2
 STATUS_BURN = 3
 FIRE, WATER, ELECTRIC, GROUND, ICE = 10, 11, 13, 4, 15
@@ -70,6 +82,21 @@ def hp_range(base, iv, level=100):
             math.floor((2 * base + iv + 63) * level / 100) + level + 10)
 
 
+def stat_range_any_iv(base, level=100):
+    """[min, max] of a non-HP stat over IVs 0-31, EVs 0-252 and natures 0.9-1.1 (v4)."""
+    lo = math.floor((math.floor(2 * base * level / 100) + 5) * 0.9)
+    hi = math.floor((math.floor((2 * base + 31 + 63) * level / 100) + 5) * 1.1)
+    return lo, hi
+
+
+def hp_range_any_iv(base, level=100):
+    """[min, max] max HP over IVs 0-31 and EVs 0-252 (v4)."""
+    if base == 1:                              # Shedinja
+        return 1, 1
+    return (math.floor(2 * base * level / 100) + level + 10,
+            math.floor((2 * base + 31 + 63) * level / 100) + level + 10)
+
+
 def stage_mult(stage):
     n, d = STAGE[stage + 6]
     return n / d
@@ -92,8 +119,9 @@ def effectiveness(move_type, def_types):
 
 def move_damage(move, atk, dfn, *, atk_types, def_types, atk_stage=0, def_stage=0, atk_item=0, atk_ability=(),
                 def_ability=(), atk_species=0, atk_burned=False, screen=False, weather=0, atk_hp_frac=1.0,
-                def_hp=(1, 1)):
-    """Damage range (HP) of `move`. atk / dfn are (min, max) stat ranges; def_hp the defender's max HP range."""
+                def_hp=(1, 1), version=4):
+    """Damage range (HP) of `move`. atk / dfn are (min, max) stat ranges; def_hp the defender's max HP range.
+    `version` 3 keeps the v3 species quirk of Thick Club / Light Ball (module docstring)."""
     if not move:
         return 0.0, 0.0
     m = MOVES[move]
@@ -131,9 +159,10 @@ def move_damage(move, atk, dfn, *, atk_types, def_types, atk_stage=0, def_stage=
         a_mult *= 1.5
     if phys and ITEMS[atk_item]["hold_effect"] == CHOICE_BAND:
         a_mult *= 1.5
-    if phys and ITEMS[atk_item]["hold_effect"] == THICK_CLUB and atk_species in (SP_CUBONE, SP_MAROWAK):
+    club, ball = ((SP_CUBONE, SP_MAROWAK), (SP_PIKACHU,)) if version <= 3 else (THICK_CLUB_SPECIES, LIGHT_BALL_SPECIES)
+    if phys and ITEMS[atk_item]["hold_effect"] == THICK_CLUB and atk_species in club:
         a_mult *= 2
-    if not phys and ITEMS[atk_item]["hold_effect"] == LIGHT_BALL and atk_species == SP_PIKACHU:
+    if not phys and ITEMS[atk_item]["hold_effect"] == LIGHT_BALL and atk_species in ball:
         a_mult *= 2
     if ITEMS[atk_item]["hold_effect"] in TYPE_POWER_ITEM and TYPE_POWER_ITEM[ITEMS[atk_item]["hold_effect"]] == mtype:
         power = power * (100 + ITEMS[atk_item]["hold_effect_param"]) / 100
@@ -161,18 +190,26 @@ def move_damage(move, atk, dfn, *, atk_types, def_types, atk_stage=0, def_stage=
 
 # ---- the features the battler receives ----------------------------------------------------------------------
 
-def battle_estimates(view, ctx):
+def battle_estimates(view, ctx=None, version=4):
     """Per own Pokemon i and move j: damage vs the enemy's active Pokemon as fractions of its max HP
     (min, max, can-KO-now); per revealed enemy move j: damage vs our active Pokemon (min, max, can-KO-now);
-    per own Pokemon: worst revealed threat (max fraction, can-KO) and whether it outspeeds (sure, maybe)."""
+    per own Pokemon: worst revealed threat (max fraction, can-KO) and whether it outspeeds (sure, maybe).
+    `version` 3 reproduces the v3 features (fixed IVs from `ctx`, level 100); 4 needs no `ctx`."""
     foe = view.enemy_party[view.enemy_active.party_index]
     fa = view.enemy_active
-    iv = enemy_ivs(ctx["challenge"], ctx["battle"])
     base = SPECIES[foe.species]["base"] if foe.species else [0] * 6
-    f_hp = hp_range(base[0], iv)
-    f_atk = [stat_range(base[i], iv) for i in ATK_IDX]
-    f_def = [stat_range(base[i], iv) for i in DEF_IDX]
-    f_spe = stat_range(base[3], iv)
+    if version <= 3:
+        iv = enemy_ivs(ctx["challenge"], ctx["battle"])
+        f_hp = hp_range(base[0], iv)
+        f_atk = [stat_range(base[i], iv) for i in ATK_IDX]
+        f_def = [stat_range(base[i], iv) for i in DEF_IDX]
+        f_spe = stat_range(base[3], iv)
+    else:
+        lvl = foe.level or 100
+        f_hp = hp_range_any_iv(base[0], lvl)
+        f_atk = [stat_range_any_iv(base[i], lvl) for i in ATK_IDX]
+        f_def = [stat_range_any_iv(base[i], lvl) for i in DEF_IDX]
+        f_spe = stat_range_any_iv(base[3], lvl)
     f_ab = known_ability(foe.possible_abilities, foe.revealed_ability)
     f_item = foe.revealed_item or 0
     f_frac = max(foe.hp_pixels, 0) / 48
@@ -193,7 +230,7 @@ def battle_estimates(view, ctx):
                                  atk_burned=me.status == STATUS_BURN,
                                  screen=(view.enemy_side.reflect_turns if phys else view.enemy_side.light_screen_turns) > 0,
                                  weather=view.weather, atk_hp_frac=me.hp / me.max_hp if me.max_hp else 0,
-                                 def_hp=f_hp)
+                                 def_hp=f_hp, version=version)
             lo_f, hi_f = lo / f_hp[1], hi / f_hp[0]
             rows.append((min(lo_f, 1.5), min(hi_f, 1.5), float(hi_f >= f_frac > 0)))
         own_moves.append(rows)
@@ -208,7 +245,8 @@ def battle_estimates(view, ctx):
                                  atk_ability=f_ab, def_ability={me.ability}, atk_species=foe.species,
                                  atk_burned=foe.status == STATUS_BURN,
                                  screen=(view.own_side.reflect_turns if phys else view.own_side.light_screen_turns) > 0,
-                                 weather=view.weather, atk_hp_frac=f_frac, def_hp=(me.max_hp, me.max_hp))
+                                 weather=view.weather, atk_hp_frac=f_frac, def_hp=(me.max_hp, me.max_hp),
+                                 version=version)
             frac = hi / me.max_hp if me.max_hp else 0
             worst = max(worst, min(frac, 1.5))
             ko = max(ko, float(me.hp > 0 and hi >= me.hp))
@@ -230,6 +268,7 @@ def battle_estimates(view, ctx):
                              atk_item=f_item, atk_ability=f_ab, def_ability={me.ability}, atk_species=foe.species,
                              atk_burned=foe.status == STATUS_BURN,
                              screen=(view.own_side.reflect_turns if phys else view.own_side.light_screen_turns) > 0,
-                             weather=view.weather, atk_hp_frac=f_frac, def_hp=(me.max_hp, me.max_hp))
+                             weather=view.weather, atk_hp_frac=f_frac, def_hp=(me.max_hp, me.max_hp),
+                             version=version)
         foe_moves.append((min(lo / me.max_hp, 1.5), min(hi / me.max_hp, 1.5), float(me.hp > 0 and hi >= me.hp)))
     return own_moves, foe_moves, threats, speed
