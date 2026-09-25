@@ -134,6 +134,12 @@ bool AIContext::typeEffectivenessEquals(int effectiveness) {
     return aiEff == effectiveness;
 }
 
+// Game stat IDs (STAT_ATK=1 .. STAT_EVASION=7) -> ActiveMon::statStages index
+static uint8_t toBattleStat(uint8_t gameStat) {
+    static const uint8_t MAP[8] = {ATK, ATK, DEF, SPE, SPA, SPD, ACC, EVA};
+    return MAP[gameStat & 7];
+}
+
 bool AIContext::statLevelLessThan(uint8_t battlerId, uint8_t stat, uint8_t val) {
     uint8_t id = getBattler(battlerId);
     const auto& mon = engine.getState().active[id];
@@ -141,19 +147,19 @@ bool AIContext::statLevelLessThan(uint8_t battlerId, uint8_t stat, uint8_t val) 
     // val is usually 6 + stage (0-12)?
     // Decomp constants: DEFAULT_STAT_STAGE = 6.
     // So usually comparison is against 6-based index.
-    return (mon.statStages[stat] + 6) < val;
+    return (mon.statStages[toBattleStat(stat)] + 6) < val;
 }
 
 bool AIContext::statLevelMoreThan(uint8_t battlerId, uint8_t stat, uint8_t val) {
     uint8_t id = getBattler(battlerId);
     const auto& mon = engine.getState().active[id];
-    return (mon.statStages[stat] + 6) > val;
+    return (mon.statStages[toBattleStat(stat)] + 6) > val;
 }
 
 bool AIContext::statLevelEqual(uint8_t battlerId, uint8_t stat, uint8_t val) {
     uint8_t id = getBattler(battlerId);
     const auto& mon = engine.getState().active[id];
-    return (mon.statStages[stat] + 6) == val;
+    return (mon.statStages[toBattleStat(stat)] + 6) == val;
 }
 
 uint8_t AIContext::getAbility(uint8_t battlerId) {

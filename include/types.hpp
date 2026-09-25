@@ -95,58 +95,8 @@ struct SpeciesData {
 // ============================================================================
 // Move Effects (auto-generated from battle_moves.h)
 // ============================================================================
-enum class MoveEffect : uint16_t {
-    ABSORB = 0, ACCURACY_DOWN = 1, ACCURACY_DOWN_HIT = 2, ALL_STATS_UP_HIT = 3,
-    ALWAYS_HIT = 4, ASSIST = 5, ATTACK_DOWN = 6, ATTACK_DOWN_2 = 7,
-    ATTACK_DOWN_HIT = 8, ATTACK_UP = 9, ATTACK_UP_2 = 10, ATTACK_UP_HIT = 11,
-    ATTRACT = 12, BATON_PASS = 13, BEAT_UP = 14, BELLY_DRUM = 15,
-    BIDE = 16, BLAZE_KICK = 17, BRICK_BREAK = 18, BULK_UP = 19,
-    BURN_HIT = 20, CALM_MIND = 21, CAMOUFLAGE = 22, CHARGE = 23,
-    CONFUSE = 24, CONFUSE_HIT = 25, CONVERSION = 26, CONVERSION_2 = 27,
-    COSMIC_POWER = 28, COUNTER = 29, CURSE = 30, DEFENSE_CURL = 31,
-    DEFENSE_DOWN = 32, DEFENSE_DOWN_2 = 33, DEFENSE_DOWN_HIT = 34, DEFENSE_UP = 35,
-    DEFENSE_UP_2 = 36, DEFENSE_UP_HIT = 37, DESTINY_BOND = 38, DISABLE = 39,
-    DOUBLE_EDGE = 40, DOUBLE_HIT = 41, DRAGON_DANCE = 42, DRAGON_RAGE = 43,
-    DREAM_EATER = 44, EARTHQUAKE = 45, ENCORE = 46, ENDEAVOR = 47,
-    ENDURE = 48, ERUPTION = 49, EVASION_DOWN = 50, EVASION_UP = 51,
-    EXPLOSION = 52, FACADE = 53, FAKE_OUT = 54, FALSE_SWIPE = 55,
-    FLAIL = 56, FLATTER = 57, FLINCH_HIT = 58, FLINCH_MINIMIZE_HIT = 59,
-    FOCUS_ENERGY = 60, FOCUS_PUNCH = 61, FOLLOW_ME = 62, FORESIGHT = 63,
-    FREEZE_HIT = 64, FRUSTRATION = 65, FURY_CUTTER = 66, FUTURE_SIGHT = 67,
-    GRUDGE = 68, GUST = 69, HAIL = 70, HAZE = 71,
-    HEAL_BELL = 72, HELPING_HAND = 73, HIDDEN_POWER = 74, HIGH_CRITICAL = 75,
-    HIT = 76, IMPRISON = 77, INGRAIN = 78, KNOCK_OFF = 79,
-    LEECH_SEED = 80, LEVEL_DAMAGE = 81, LIGHT_SCREEN = 82, LOCK_ON = 83,
-    LOW_KICK = 84, MAGIC_COAT = 85, MAGNITUDE = 86, MEAN_LOOK = 87,
-    MEMENTO = 88, METRONOME = 89, MIMIC = 90, MINIMIZE = 91,
-    MIRROR_COAT = 92, MIRROR_MOVE = 93, MIST = 94, MOONLIGHT = 95,
-    MORNING_SUN = 96, MUD_SPORT = 97, MULTI_HIT = 98, NATURE_POWER = 99,
-    NIGHTMARE = 100, OHKO = 101, OVERHEAT = 102, PAIN_SPLIT = 103,
-    PARALYZE = 104, PARALYZE_HIT = 105, PAY_DAY = 106, PERISH_SONG = 107,
-    POISON = 108, POISON_FANG = 109, POISON_HIT = 110, POISON_TAIL = 111,
-    PRESENT = 112, PROTECT = 113, PSYCH_UP = 114, PSYWAVE = 115,
-    PURSUIT = 116, QUICK_ATTACK = 117, RAGE = 118, RAIN_DANCE = 119,
-    RAMPAGE = 120, RAPID_SPIN = 121, RAZOR_WIND = 122, RECHARGE = 123,
-    RECOIL = 124, RECOIL_IF_MISS = 125, RECYCLE = 126, REFLECT = 127,
-    REFRESH = 128, REST = 129, RESTORE_HP = 130, RETURN = 131,
-    REVENGE = 132, ROAR = 133, ROLE_PLAY = 134, ROLLOUT = 135,
-    SAFEGUARD = 136, SANDSTORM = 137, SECRET_POWER = 138, SEMI_INVULNERABLE = 139,
-    SKETCH = 140, SKILL_SWAP = 141, SKULL_BASH = 142, SKY_ATTACK = 143,
-    SKY_UPPERCUT = 144, SLEEP = 145, SLEEP_TALK = 146, SMELLINGSALT = 147,
-    SNATCH = 148, SNORE = 149, SOFTBOILED = 150, SOLAR_BEAM = 151,
-    SONICBOOM = 152, SPECIAL_ATTACK_DOWN_HIT = 153, SPECIAL_ATTACK_UP = 154, SPECIAL_ATTACK_UP_2 = 155,
-    SPECIAL_DEFENSE_DOWN_2 = 156, SPECIAL_DEFENSE_DOWN_HIT = 157, SPECIAL_DEFENSE_UP_2 = 158, SPEED_DOWN = 159,
-    SPEED_DOWN_2 = 160, SPEED_DOWN_HIT = 161, SPEED_UP_2 = 162, SPIKES = 163,
-    SPITE = 164, SPIT_UP = 165, SPLASH = 166, STOCKPILE = 167,
-    SUBSTITUTE = 168, SUNNY_DAY = 169, SUPERPOWER = 170, SUPER_FANG = 171,
-    SWAGGER = 172, SWALLOW = 173, SYNTHESIS = 174, TAUNT = 175,
-    TEETER_DANCE = 176, TELEPORT = 177, THAW_HIT = 178, THIEF = 179,
-    THUNDER = 180, TICKLE = 181, TORMENT = 182, TOXIC = 183,
-    TRANSFORM = 184, TRAP = 185, TRICK = 186, TRIPLE_KICK = 187,
-    TRI_ATTACK = 188, TWINEEDLE = 189, TWISTER = 190, UPROAR = 191,
-    VITAL_THROW = 192, WATER_SPORT = 193, WEATHER_BALL = 194, WILL_O_WISP = 195,
-    WISH = 196, YAWN = 197,
-    COUNT = 198
+enum class MoveEffect : uint8_t {
+#include "gen/move_effects.inc"
 };
 
 // ============================================================================
@@ -174,6 +124,16 @@ struct MoveData {
                           //   -6: Roar, Whirlwind
     bool isPhysical;      // true = Physical (uses Attack/Defense), false = Special
     bool makesContact;    // true = triggers contact abilities (Rough Skin, etc)
+    uint8_t target;       // MOVE_TARGET_* bits
+    uint8_t flags;        // FLAG_* bits (contact, protect, magic coat, snatch, mirror move, king's rock)
+};
+
+// ============================================================================
+// Item Data (gItems hold effects)
+// ============================================================================
+struct ItemData {
+    uint8_t holdEffect;       // HOLD_EFFECT_*
+    uint8_t holdEffectParam;
 };
 
 // ============================================================================

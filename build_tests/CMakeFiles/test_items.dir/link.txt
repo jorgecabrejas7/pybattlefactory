@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/test_items.dir/tests/test_items.cpp.o -o test_items  libbattle_sim.a 

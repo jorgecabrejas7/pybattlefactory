@@ -1,23 +1,10 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import os
-import sys
 import itertools
 from enum import IntEnum
 
-# Ensure pybattle can be imported
-# The shared library is usually in simulator/build/
-BUILD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build')
-if BUILD_DIR not in sys.path:
-    sys.path.append(BUILD_DIR)
-
-try:
-    import pybattle
-except ImportError:
-    # Try direct relative path if called from project root
-    sys.path.append("./simulator/build")
-    import pybattle
+from . import pybattle_native as pybattle
 
 class FactoryPhase(IntEnum):
     RENTAL = 0

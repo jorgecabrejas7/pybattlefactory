@@ -1,24 +1,8 @@
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
-import os
-import sys
 
-# Ensure pybattle can be imported
-BUILD_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'build')
-if BUILD_DIR not in sys.path:
-    sys.path.append(BUILD_DIR)
-
-# LD_PRELOAD fix for libstdc++ in some environments
-# Note: This is a hack, usually you'd want to fix the environment or link statically
-# os.environ["LD_PRELOAD"] = "/usr/lib/x86_64-linux-gnu/libstdc++.so.6"
-
-try:
-    import pybattle
-except ImportError:
-    # Try direct relative path
-    sys.path.append("./simulator/build")
-    import pybattle
+from . import pybattle_native as pybattle
 
 class PokemonEnv(gym.Env):
     """

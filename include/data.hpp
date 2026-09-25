@@ -16,6 +16,23 @@ const SpeciesData& getSpeciesData(uint16_t speciesId);
 /// Get move data by ID
 const MoveData& getMoveData(uint16_t moveId);
 
+/// Get item hold effect data by ITEM_* ID
+const ItemData& getItemData(uint16_t itemId);
+
+/// gTypeEffectiveness entry (multiplier is x10: 0, 5, 20)
+struct TypeEffectivenessEntry {
+    uint8_t attacker;
+    uint8_t defender;
+    uint8_t multiplier;
+};
+constexpr uint8_t TYPE_FORESIGHT = 0xFE;
+constexpr uint8_t TYPE_ENDTABLE = 0xFF;
+extern const TypeEffectivenessEntry TYPE_EFFECTIVENESS[];
+extern const size_t TYPE_EFFECTIVENESS_COUNT;
+
+/// gStatStageRatios: {numerator, denominator} for stages -6..+6
+extern const uint8_t STAT_STAGE_RATIOS[13][2];
+
 /// Get type effectiveness: returns 0, 25, 50, 100, 200, or 400 (x100 to avoid floats)
 int getTypeEffectiveness(Type attackType, Type defendType);
 

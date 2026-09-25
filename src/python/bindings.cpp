@@ -3,6 +3,8 @@
 #include <pybind11/numpy.h>
 
 #include "battle_engine.hpp"
+#include "gen3_game.hpp"
+#include "gen3_mcts.hpp"
 #include "factory.hpp"
 #include "types.hpp"
 #include "constants.hpp"
@@ -134,7 +136,9 @@ PYBIND11_MODULE(pybattle_native, m) {
 
     py::class_<FactoryHelper>(m, "FactoryGenerator")
         .def(py::init<uint32_t>()) // seed
-        .def("generate_opponent_team", &FactoryHelper::generate_opponent_team)
+        .def("generate_opponent_team", &FactoryHelper::generate_opponent_team,
+             py::arg("challenge_num"), py::arg("battle_num"), py::arg("is_open_level"),
+             py::arg("player_species") = std::vector<uint16_t>{})
         .def("generate_player_team", &FactoryHelper::generate_player_team);
 
     // VecBattleEnv
@@ -176,4 +180,99 @@ PYBIND11_MODULE(pybattle_native, m) {
         .def("get_legal_actions", &VecBattleEnv::getLegalActions)
         .def("get_state", &VecBattleEnv::getState, py::return_value_policy::reference)
         .def("size", &VecBattleEnv::size);
+
+    // Game-exact battle core (pokeemerald battle code, headless)
+    py::class_<Gen3Game> gen3(m, "Gen3Game");
+    py::enum_<Gen3Game::FactoryPhase>(gen3, "FactoryPhase")
+        .value("NONE", Gen3Game::F_NONE)
+        .value("RENTAL", Gen3Game::F_RENTAL)
+        .value("BATTLE", Gen3Game::F_BATTLE)
+        .value("SWAP", Gen3Game::F_SWAP)
+        .value("RUN_OVER", Gen3Game::F_RUN_OVER);
+    py::class_<Gen3Game::FactoryInfo>(gen3, "FactoryInfo")
+        .def_readonly("phase", &Gen3Game::FactoryInfo::phase)
+        .def_readonly("lvl_mode", &Gen3Game::FactoryInfo::lvlMode)
+        .def_readonly("hint_type", &Gen3Game::FactoryInfo::hintType)
+        .def_readonly("hint_style", &Gen3Game::FactoryInfo::hintStyle)
+        .def_readonly("brain_status", &Gen3Game::FactoryInfo::brainStatus)
+        .def_readonly("last_outcome", &Gen3Game::FactoryInfo::lastOutcome)
+        .def_readonly("trainer_id", &Gen3Game::FactoryInfo::trainerId)
+        .def_readonly("wins", &Gen3Game::FactoryInfo::wins)
+        .def_readonly("swaps", &Gen3Game::FactoryInfo::swaps)
+        .def_readonly("challenges_won", &Gen3Game::FactoryInfo::challengesWon);
+    py::enum_<Gen3Game::Decision>(gen3, "Decision")
+        .value("NONE", Gen3Game::NONE)
+        .value("ACTION", Gen3Game::ACTION)
+        .value("SWITCH", Gen3Game::SWITCH)
+        .value("BATTLE_OVER", Gen3Game::BATTLE_OVER)
+        .value("TIMEOUT", Gen3Game::TIMEOUT);
+    gen3.def(py::init<>())
+        .def("clone", [](const Gen3Game& b) { return Gen3Game(b); })
+        .def("set_battle", &Gen3Game::setBattle, py::arg("battle_type_flags"), py::arg("trainer_id"))
+        .def("write_party", [](Gen3Game& b, int side, py::bytes raw) { b.writeParty(side, raw); })
+        .def("write_saveblock2", [](Gen3Game& b, uint32_t off, py::bytes data) { b.writeSaveBlock2(off, data); })
+        .def("read_saveblock2", [](Gen3Game& b, uint32_t off, size_t n) { return py::bytes(b.readSaveBlock2(off, n)); })
+        .def("set_var", &Gen3Game::setVar)
+        .def("set_flag", &Gen3Game::setFlag)
+        .def("start", &Gen3Game::start, py::arg("rng"))
+        .def("run", &Gen3Game::run, py::arg("max_frames") = 200000)
+        .def("choose_move", &Gen3Game::chooseMove)
+        .def("unusable_moves", &Gen3Game::unusableMoves, py::arg("battler") = 0)
+        .def("can_switch", &Gen3Game::canSwitch, py::arg("battler") = 0)
+        .def("choiced_move", &Gen3Game::choicedMove, py::arg("battler") = 0)
+        .def("choose_switch", &Gen3Game::chooseSwitch)
+        .def("forfeit", &Gen3Game::forfeit)
+        .def_property_readonly("rng", &Gen3Game::rng)
+        .def_property_readonly("frames", &Gen3Game::frames)
+        .def_static("trace_random", &Gen3Game::traceRandom)
+        .def("read", [](Gen3Game& b, uint32_t addr, size_t n) { return py::bytes(b.readRam(addr, n)); })
+        .def("write", [](Gen3Game& b, uint32_t addr, py::bytes data) { b.writeRam(addr, data); })
+        .def("factory_begin", &Gen3Game::factoryBegin, py::arg("open_level") = true, py::arg("win_streak") = 0,
+             py::arg("rents_count") = 0, py::arg("seed") = 0)
+        .def_property_readonly("factory_phase", &Gen3Game::factoryPhase)
+        .def("factory_rental", [](Gen3Game& g, uint8_t i) { return py::bytes(g.factoryRental(i)); })
+        .def("factory_rental_mon_id", &Gen3Game::factoryRentalMonId)
+        .def("factory_rent", &Gen3Game::factoryRent)
+        .def("factory_swap", &Gen3Game::factorySwap, py::arg("player_slot"), py::arg("enemy_slot") = 0)
+        .def("factory_run_battle", &Gen3Game::factoryRunBattle, py::arg("max_frames") = 400000)
+        .def_property_readonly("factory_info", &Gen3Game::factoryInfo)
+        // Search: never advance the Factory phase (see src/gen3/search_host.c)
+        .def("sim_step", [](Gen3Game& g, int kind, int index) {
+                auto r = g.simStep(kind, index);
+                return py::make_tuple(r.first, r.second);
+            }, py::arg("kind"), py::arg("index"),
+            "kind 0 = move slot, 1 = switch to party index; run to the next decision or the battle's end. "
+            "Returns (decision, gBattleOutcome).")
+        .def("set_rng", &Gen3Game::setRng, py::arg("seed"))
+        .def_property_readonly("battle_outcome", &Gen3Game::battleOutcome)
+        .def("determinize", [](Gen3Game& g, const std::vector<std::tuple<int, int, int, int, float>>& slots,
+                               int64_t hiddenSeed) {
+                std::vector<Gen3Game::DetSlot> v;
+                for (const auto& t : slots)
+                    v.push_back({std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t), std::get<4>(t)});
+                g.determinize(v, hiddenSeed);
+            }, py::arg("slots"), py::arg("hidden_seed"),
+            "slots: [(party_slot, frontier_set_id | -1 keep, iv, ability_bit, hp_fraction | -1 keep)]. "
+            "hidden_seed >= 0 also resamples hidden sleep/confusion counters; < 0 leaves them.");
+
+    py::class_<MctsTree>(m, "MctsTree")
+        .def(py::init<int, float, float>(), py::arg("n_actions") = 7, py::arg("c_puct") = 1.5f,
+             py::arg("virtual_loss") = 1.0f)
+        .def("reset", &MctsTree::reset)
+        .def("expand", &MctsTree::expand, py::arg("node"), py::arg("priors"), py::arg("legal"))
+        .def("set_terminal", &MctsTree::setTerminal, py::arg("node"), py::arg("value"))
+        .def("select", &MctsTree::select, py::arg("k"))
+        .def("backup", &MctsTree::backup, py::arg("node"), py::arg("value"))
+        .def("root_visits", &MctsTree::rootVisits)
+        .def("root_q", &MctsTree::rootQ)
+        .def("node_count", &MctsTree::nodeCount)
+        .def("is_expanded", &MctsTree::isExpanded, py::arg("node"))
+        .def("is_terminal", &MctsTree::isTerminal, py::arg("node"))
+        .def("visits", &MctsTree::visits, py::arg("node"))
+        .def("value", &MctsTree::value, py::arg("node"))
+        .def("child", &MctsTree::child, py::arg("node"), py::arg("action"))
+        .def_property_readonly("n_actions", &MctsTree::nActions)
+        .def_property_readonly("c_puct", &MctsTree::cPuct)
+        .def_property_readonly("virtual_loss", &MctsTree::virtualLoss);
+    m.attr("Gen3Battle") = gen3;  // older name
 }

@@ -6,3 +6,9 @@ __pycache__/
 *.so
 .cibuildwheel/
 .pytest_cache/
+build_tests/
+.scratch/
+build-dbg/
+runs/
+watch_log.jsonl
+shot_*.png

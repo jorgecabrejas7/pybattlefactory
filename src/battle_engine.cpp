@@ -29,7 +29,6 @@ int BattleEngine::calculateDamage(uint8_t attackerSide, uint8_t defenderSide, ui
     // 1. Get Move Data
     const Pokemon& attacker = m_state.getActivePokemon(attackerSide);
     
-    // ... (lines 60-100 hidden) ...
     
     const Pokemon& defender = m_state.getActivePokemon(defenderSide);
     const ActiveMon& attackerActive = m_state.active[attackerSide];
@@ -1402,9 +1401,7 @@ void BattleEngine::applyMoveEffect(uint8_t attackerSide, uint8_t defenderSide, u
              break;
     }
     }
-}
 
-namespace pkmn {
 void BattleEngine::applyEndOfTurnEffects() {
     // Weather damage
     if (m_state.weather == Weather::Sandstorm || m_state.weather == Weather::Hail) {
