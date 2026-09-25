@@ -20,7 +20,8 @@ class Policy:
         self.value_norm = ck.get("value_norm") or {}      # per agent {"mean", "var"} (--value-norm 1), or None
         if self.algo == "rainbow":
             encode.set_version(a.get("encode_version", 2))
-            self.net = rainbow.RainbowNet(a["atoms"], a["d_emb"], a["d"], a["layers"], a["heads"]).to(device)
+            self.net = rainbow.RainbowNet(a["atoms"], a["d_emb"], a["d"], a["layers"], a["heads"],
+                                          share=a.get("share", "all")).to(device)
             self.support = {"battle": torch.linspace(a["vmin_b"], a["vmax_b"], a["atoms"], device=device)}
             self.support["rental"] = self.support["swap"] = torch.linspace(a["vmin_t"], a["vmax_t"], a["atoms"],
                                                                            device=device)

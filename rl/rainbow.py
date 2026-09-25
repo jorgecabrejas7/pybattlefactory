@@ -62,10 +62,15 @@ def noisy_mlp(i, h, o):
 class RainbowNet(nn.Module):
     """Returns log-probabilities over atoms, [B, n_actions, atoms], for each decision kind."""
 
-    def __init__(self, atoms=51, d_emb=64, d=128, layers=2, heads=4):
+    def __init__(self, atoms=51, d_emb=64, d=128, layers=2, heads=4, share="all"):
+        """share: as FactoryNet ("all": one trunk; "embeddings": the tactician has its own encoders and
+        transformer and shares only the embedding tables, like ppo_joint_v3)."""
         super().__init__()
         self.atoms = atoms
         self.trunk = Trunk(d_emb, d, layers, heads)
+        if share != "all":
+            self.trunk_t = Trunk(d_emb, d, layers, heads, emb_from=self.trunk)
+        self.share = share
         # action embeddings (deterministic) -> noisy dueling heads
         self.b_move = mlp(3 * d, d, d)
         self.b_switch = mlp(2 * d, d, d)
@@ -75,6 +80,9 @@ class RainbowNet(nn.Module):
         self.b_adv, self.b_val = noisy_mlp(d, d, atoms), noisy_mlp(2 * d, d, atoms)
         self.t_adv, self.t_val = noisy_mlp(d, d, atoms), noisy_mlp(2 * d, d, atoms)
         self.register_buffer("pairs", torch.tensor(E.PAIRS, dtype=torch.long))
+
+    def tactician_trunk(self):
+        return self.trunk if self.share == "all" else self.trunk_t
 
     def noisy_layers(self):
         return [m for m in self.modules() if isinstance(m, NoisyLinear)]
@@ -106,13 +114,13 @@ class RainbowNet(nn.Module):
             pool = torch.cat([mons.mean(1), ctx], -1)
             return self._dueling(self.b_adv(h), self.b_val(pool), x["mask"])
         if kind == "rental":
-            mons, ctx, _ = self.trunk(x, 1)
+            mons, ctx, _ = self.tactician_trunk()(x, 1)
             pair_h = mons[:, self.pairs[:, 0]] + mons[:, self.pairs[:, 1]]     # [B, 15, d]
             h = self.t_rent(torch.cat([mons[:, :, None].expand(-1, 6, 15, -1), pair_h[:, None].expand(-1, 6, -1, -1),
                                        ctx[:, None, None].expand(-1, 6, 15, -1)], -1)).flatten(1, 2)   # [B, 90, d]
             pool = torch.cat([mons.mean(1), ctx], -1)
             return self._dueling(self.t_adv(h), self.t_val(pool), x["pair_mask"].flatten(1))
-        mons, ctx, _ = self.trunk(x, 2)
+        mons, ctx, _ = self.tactician_trunk()(x, 2)
         own, foe = mons[:, :3], mons[:, 3:]
         grid = self.t_swap(torch.cat([own[:, :, None].expand(-1, 3, 3, -1), foe[:, None].expand(-1, 3, 3, -1),
                                       ctx[:, None, None].expand(-1, 3, 3, -1)], -1)).flatten(1, 2)
@@ -256,7 +264,11 @@ KEYS = {"battle": ("mon_ids", "mon_num", "move_num", "ctx_ids", "ctx_num", "mask
 
 
 def learn(net, target, opt, replay, support, batch, beta, device, max_grad_norm=10.0):
-    """One distributional double-DQN step on a prioritized batch. Returns stats."""
+    """One distributional double-DQN step on a prioritized batch. Returns stats.
+    The target network draws a fresh noise sample at every step (as the online one does when acting): with the
+    sample copied at the last sync it would evaluate every target with one fixed perturbation for thousands of
+    steps."""
+    target.reset_noise()
     idx, w = replay.sample(batch, beta)
     atoms = support.numel()
     vmin, vmax = support[0].item(), support[-1].item()

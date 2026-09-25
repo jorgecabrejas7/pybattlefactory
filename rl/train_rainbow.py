@@ -38,7 +38,7 @@ def parse():
     p.add_argument("--vmax-b", type=float, default=2.0)
     p.add_argument("--vmin-t", type=float, default=0.0)
     p.add_argument("--vmax-t", type=float, default=60.0)
-    p.add_argument("--gamma-b", type=float, default=0.99)
+    p.add_argument("--gamma-b", type=float, default=1.0, help="battler discount (as ppo_joint_v3)")
     p.add_argument("--gamma-t", type=float, default=1.0)
     p.add_argument("--n-b", type=int, default=5)
     p.add_argument("--n-t", type=int, default=3)
@@ -55,6 +55,12 @@ def parse():
     p.add_argument("--warmup-b", type=int, default=20_000)
     p.add_argument("--warmup-t", type=int, default=2_000)
     p.add_argument("--beta", type=float, default=0.5, help="potential-based shaping weight")
+    p.add_argument("--beta-anneal-steps", type=float, default=20e6,
+                   help="battler steps over which the shaping weight goes linearly from --beta to 0 (0: constant)")
+    p.add_argument("--start-p0", type=float, default=0.5, help="probability a run starts at round 1 (streak 0)")
+    p.add_argument("--start-max-round", type=int, default=5, help="other runs start at streak 7k, k in 1..this")
+    p.add_argument("--share", default="embeddings", choices=("all", "embeddings"),
+                   help="what the tactician shares with the battler")
     p.add_argument("--max-decisions", type=int, default=300)
     p.add_argument("--d-emb", type=int, default=64)
     p.add_argument("--d", type=int, default=128)
@@ -81,7 +87,7 @@ def main():
     tb.add_text("config", "```\n" + json.dumps(cfg, indent=2) + "\n```")
 
     encode.set_version(args.encode_version)
-    net = RainbowNet(args.atoms, args.d_emb, args.d, args.layers, args.heads).to(device)
+    net = RainbowNet(args.atoms, args.d_emb, args.d, args.layers, args.heads, share=args.share).to(device)
     target = copy.deepcopy(net)
     for p_ in target.parameters():
         p_.requires_grad_(False)
@@ -91,7 +97,8 @@ def main():
     support = {"battle": sup["battler"], "rental": sup["tactician"], "swap": sup["tactician"]}
 
     env = VecEnv(args.workers, args.envs_per_worker, seed=args.seed, gamma=args.gamma_b, beta=args.beta,
-                 max_decisions=args.max_decisions)
+                 max_decisions=args.max_decisions, start_p0=args.start_p0, start_max_round=args.start_max_round)
+    beta_now = args.beta
     n = env.n
     events = env.reset()
 
@@ -189,6 +196,11 @@ def main():
                     swap_counts["keep" if a == 0 else "swap"] += 1
             actions[i] = decode_action(kind, to_env_action(kind, a))
         events = env.step(actions)
+        if args.beta_anneal_steps > 0:                  # the shaping weight is withdrawn as in ppo_joint_v3
+            b_target = args.beta * max(0.0, 1.0 - b_steps / args.beta_anneal_steps)
+            if abs(b_target - beta_now) > 0.005 or (b_target == 0.0 and beta_now != 0.0):
+                env.set("beta", b_target)
+                beta_now = b_target
 
         # ---- learning: keep (sampled transitions) / (new transitions) = reuse --------------------------------
         tl = time.time()
@@ -211,7 +223,8 @@ def main():
 
         if b_steps >= next_save:
             next_save += args.save_every
-            ck = {"net": net.state_dict(), "args": cfg, "battler_steps": b_steps, "tactician_steps": t_steps}
+            ck = {"net": net.state_dict(), "opt": opt.state_dict(), "args": cfg, "battler_steps": b_steps,
+                  "tactician_steps": t_steps}
             torch.save(ck, os.path.join(run_dir, "latest.pt"))
             torch.save(ck, os.path.join(run_dir, f"ckpt_{b_steps:011d}.pt"))
 
