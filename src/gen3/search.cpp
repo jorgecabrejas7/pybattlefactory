@@ -33,6 +33,7 @@ struct NodeState {
     std::unique_ptr<Gen3Game> game;
     std::unique_ptr<NodeObs> obs;
     int decisions = 0;
+    int depth = 0;                                // decisions of ours from the root
 };
 
 struct TreeData {
@@ -186,6 +187,10 @@ SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, cons
             auto g = std::make_unique<Gen3Game>(g0);
             auto obs = o0.clone();
             AdvanceResult res = advance(*g, *obs, p.action, d0, cfg.maxDecisions, st.errors);
+            const int depth = (parentIsRoot ? 0 : t.states[p.parent].depth) + 1;
+            st.maxDepth = std::max(st.maxDepth, depth);
+            st.depthSum += depth;
+            st.depthCount++;
             if (res.over) {
                 tree.setTerminal(p.leaf, res.value);
                 t.setTerm(p.leaf, res.value);
@@ -196,6 +201,7 @@ SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, cons
             ns.game = std::move(g);
             ns.obs = std::move(obs);
             ns.decisions = res.decisions;
+            ns.depth = depth;
             if (static_cast<int>(enc.size()) <= static_cast<int>(toEval.size())) enc.resize(toEval.size() + 1);
             ns.obs->encode(*ns.game, ctx, enc[toEval.size()]);
             toEval.push_back({p.k, p.leaf, res.decisions >= cfg.maxDecisions});

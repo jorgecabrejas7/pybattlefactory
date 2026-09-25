@@ -92,6 +92,9 @@ struct SearchStats {
     int nodes = 0;                 // tree nodes (all trees)
     int netCalls = 0;              // evaluator calls
     int errors = 0;                // actions the game refused (counted as losses)
+    int maxDepth = 0;              // deepest new node (root = 0), over all trees
+    double depthSum = 0.0;         // sum of the depths of the new nodes (evaluated leaves and terminals)
+    int depthCount = 0;
     double msTotal = 0.0;          // whole search
     double msEval = 0.0;           // inside the evaluator
 };

@@ -176,6 +176,8 @@ struct Searcher {
         out["nodes"] = st.nodes;
         out["net_calls"] = st.netCalls;
         out["errors"] = st.errors;
+        out["max_depth"] = st.maxDepth;
+        out["mean_depth"] = st.depthCount ? st.depthSum / st.depthCount : 0.0;
         out["ms"] = st.msTotal;
         out["ms_eval"] = st.msEval;
         out["ms_cpp"] = st.msTotal - st.msEval;
@@ -209,7 +211,8 @@ void bind_search(py::module_& m) {
              "roots: [(Gen3Game, ObsMemory | BattleObserver, decisions so far)], prepared (determinized, rebased, "
              "RNG set) and only cloned from. ctx: {'streak','battle','challenge','rents'} or EncodeCtx. "
              "evaluator(batch: dict of numpy arrays as rl.encode.collate stacks them) -> (priors [B,7], values [B]). "
-             "-> {'visits', 'q', 'leaves', 'nodes', 'net_calls', 'errors', 'ms', 'ms_eval', 'ms_cpp'}")
+             "-> {'visits', 'q', 'leaves', 'nodes', 'net_calls', 'errors', 'max_depth', 'mean_depth', 'ms', 'ms_eval', "
+             "'ms_cpp'}")
         .def_property_readonly("n_sims", [](const Searcher& s) { return s.cfg.nSims; })
         .def_property_readonly("batch", [](const Searcher& s) { return s.cfg.batch; })
         .def_property_readonly("c_puct", [](const Searcher& s) { return s.cfg.cPuct; })

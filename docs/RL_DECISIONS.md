@@ -447,7 +447,7 @@ Pendiente (se suman a la lista de abajo):
   - corregir las especies de los objetos: **Hueso Grueso para Cubone y Marowak, Bola Luminosa para Pikachu**
     (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden de los ids, así que hoy se aplican al revés);
   - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
-- **Entrenar con búsqueda** (expert iteration, solo en modo legal).
+- ~~**Entrenar con búsqueda** (expert iteration, solo en modo legal).~~ Implementado: alphazero_v1 (§17).
 - **KL del táctico** (revisión 2026-09-25): sus lotes mezclan transiciones de políticas anteriores (quedan pendientes
   hasta su siguiente decisión, y las actualizaciones del combatiente mueven los embeddings compartidos), de ahí los
   picos de approx_kl. No es un fallo de cálculo. `ppo_update` registra ahora `stale_kl` / `stale_clip_frac` (antes de
@@ -485,3 +485,112 @@ Conclusión:
 **Implicación para AlphaZero:** el objetivo de valor *z* (resultado de un combate) es muy ruidoso. Conviene mezclarlo
 con el valor de la raíz de la búsqueda, que es menos ruidoso, y vigilar el sobreajuste a los datos del buffer:
 reutilizar pocas veces cada muestra y comprobar el crítico con combates de validación.
+
+---
+
+## 17. alphazero_v1: expert iteration desde cero para los dos agentes (`rl/alphazero.py`, `rl/tactician_search.py`)
+
+Decisiones del usuario: **los dos agentes desde cero**, búsqueda del combatiente **solo en modo legal**, tamaño de red
+de §16 (d = 128, 2 capas, `share="embeddings"`), tasa de aprendizaje *cosine*.
+
+**Iteración** (se repite `--iterations` veces):
+1. **Autojuego** con una copia congelada de la red: 18 procesos (`--workers`) juegan rachas. La red del combatiente
+   corre en el servidor de inferencia de la GPU (`rl/inference.py`), que ahora admite `reload()`: carga los pesos
+   nuevos sin reiniciarse, copiándolos en su sitio para que los grafos CUDA sigan siendo válidos. El táctico usa la
+   copia en CPU de cada proceso. Las rachas siguen de una iteración a la siguiente: una muestra se completa cuando
+   termina su combate (combatiente) o su racha (táctico).
+2. **Entrenamiento** con un buffer de repetición de las últimas `--window` = 4 iteraciones.
+3. **Evaluación por ronda** y **checkpoint**.
+
+**Combatiente**:
+- Decide el MCTS en C++ de §15, siempre en modo legal (`AZBattler` no tiene parámetro de modo): K = 8
+  determinizaciones, `redraw_turn` en cada raíz y 128 simulaciones (`--sims`).
+- **Ruido de Dirichlet** en los priors de la raíz (α = 0,3, peso 0,25), añadido en Python antes de la búsqueda.
+- La acción se muestrea de las visitas con temperatura 1 (`--temperature`).
+- **Objetivos**:
+  - política: la distribución de visitas de la raíz;
+  - valor: ½ z + ½ q, donde z es el resultado del combate (1/0) y q el valor de la raíz (media de Q ponderada por
+    visitas). La mezcla se cambia con `--value-mix-b`.
+- Si hay una sola acción legal no se busca: la política es one-hot y el valor, solo z.
+
+**Táctico: búsqueda por simulación** (`rl/tactician_search.py`):
+- Cada opción (alquileres legales (primero, pareja), hasta 60; intercambios, ≤ 10) se valora con combates simulados
+  en juegos clonados:
+  1. se aplica la opción (`factory_rent` / `factory_swap`, que ya rellenan `gEnemyParty` con el rival real);
+  2. **antes del primer frame del combate se sustituye el equipo rival entero** por uno sorteado con el criterio
+     estricto de §15, con los 3 Pokémon sin ver: especie uniforme entre las de la Frontera, movimientos aprendibles,
+     objeto con efecto, IVs/EVs/naturaleza/habilidad al azar y PS completos. Como plantilla se usa una copia de
+     nuestro equipo (nivel e id de entrenador), y el RNG se vuelve a sembrar con el de la búsqueda.
+     **Nada del rival real** (RAM, pista del encargado, posición del RNG) llega a la simulación: hay un test que cambia
+     el rival real (`gFrontierTempParty`) y comprueba que la búsqueda da exactamente lo mismo;
+  3. el combate lo juega la red congelada del combatiente, de forma voraz y sin búsqueda. Todos los combates
+     simulados avanzan a la vez, con una llamada por lotes a la red en cada paso. Los lotes pequeños (≤ 8) van a la
+     copia en CPU, porque una ida y vuelta al servidor cuesta más;
+  4. valor de una simulación, en las unidades del retorno del táctico (victorias hasta el final de la racha, γ = 1):
+     0 si pierde; si gana, 1 + V_t(siguiente decisión del táctico) según la red de valor del táctico
+     (`--t-bootstrap 1`; la pantalla de intercambio simulada solo muestra la especie del equipo derrotado), o solo 1
+     (`--t-bootstrap 0`). Se corta a las 100 decisiones (`--t-max-decisions`), y entonces vale lo que estime la red.
+- **Reparto**: Gumbel top-m + *sequential halving* (Danihelka et al., 2022). Se simulan las m = 16 opciones con mayor
+  log π + ruido de Gumbel. Con 256 combates por decisión (`--t-budget`) quedan 4 rondas: 4 combates por opción, la
+  mejor mitad pasa con 8, luego 16 y luego 32. La elegida es la que sobrevive al final.
+- **Objetivos**:
+  - política: la distribución de visitas del *sequential halving* (`--t-target visits`), o softmax(Q/T)
+    (`--t-target softmax`, T = 0,5 victorias);
+  - valor: ½ z + ½ q. Aquí z son las victorias desde la decisión hasta el final de la racha y q, el valor de la
+    opción elegida (`--value-mix-t`).
+- El alquiler se entrena con el **objetivo conjunto**: −Σ π(l, p) [log q(l) + log q(p | l)], es decir, el marginal del
+  primero más el condicional de la pareja. Para ello se añadió `FactoryNet.rental_joint`, que da las 6 filas de parejas
+  a la vez.
+
+**Pérdidas y optimización**:
+- Entropía cruzada con la política de la búsqueda, más el MSE del valor normalizado con `ValueNorm` (una
+  actualización por iteración con todos los objetivos del buffer, ritmo 0,3), más *weight decay* (AdamW, 1·10⁻⁴).
+- Tasa de aprendizaje 3·10⁻⁴ con coseno sobre las iteraciones planeadas (suelo del 5 %). Recorte del gradiente a 1.
+- Cada muestra nueva se usa `--reuse` = 4 veces de media (con el buffer lleno):
+  - lote de 512 decisiones del combatiente por paso;
+  - alquileres e intercambios comparten un lote de al menos 16, repartido según cuántos llegan.
+- El **5 %** de los combates y de las rachas (`--holdout`) **no se entrena**. Sirve para medir la varianza explicada
+  de cada crítico en datos no vistos (`*/explained_variance_heldout`, y `_z` contra el resultado solo): es lo que
+  recomendaba §16.
+
+**Currículo**: el 30 % de las rachas empieza en la ronda 1. El resto, en las rondas 2–6, con peso proporcional a
+1 − P(completar la ronda k), según la última evaluación por ronda (uniforme al principio). `SimBackend.reset` pone los
+símbolos de plata y oro según la racha de inicio.
+
+**Evaluación y registros**:
+- En cada iteración, evaluación por ronda con la red sola y voraz (192 rachas por ronda, las mismas semillas que
+  `eval_round`): `eval_round_k/*`. Con `--eval-search-sims 64` se evalúa también con búsqueda:
+  `eval_search_round_k/*`.
+- TensorBoard (eje x: decisiones del combatiente de autojuego):
+  - pérdidas, entropía, KL respecto a la política de la búsqueda y varianza explicada (entrenamiento y validación):
+    `battler/*` y `tactician_rental|swap/*`;
+  - velocidad de autojuego: `perf/*`;
+  - búsqueda: `search/*` (simulaciones, profundidad media y máxima, Q de la raíz, entropía de las visitas, cambios
+    de la acción respecto al prior);
+  - búsqueda del táctico: `tsearch/*`;
+  - currículo: `curriculum/*`.
+- Checkpoints en cada iteración (`ckpt_<decisiones>.pt` y `latest.pt`, escritura atómica). Guardan la red, el
+  optimizador, `value_norm` y `args` con `algo="alphazero"`. `rl.policy`, `rl.evaluate`, `rl.eval_rounds` y
+  `rl.full_report` los leen como los de PPO; `full_report` tiene `--grid` para la rejilla de pasos.
+- Profundidad de la búsqueda: `Searcher.search` devuelve ahora `max_depth` y `mean_depth`.
+
+Comando:
+
+```bash
+python -m rl.alphazero --name alphazero_v1        # valores por defecto = los de arriba
+python -m rl.az_bench --workers 18 --decisions 200  # velocidad de autojuego
+```
+
+**Pendiente de decidir** (elegido provisionalmente al implementar):
+- El rival de las simulaciones del táctico sale del sorteo estricto (sets aleatorios), así que es **mucho más débil**
+  que un rival real de la Factory. Al inicio de la ronda 3 (256 combates simulados), la red v3 gana el 98 % de esos
+  combates y una red sin entrenar, el 79 %; contra los rivales reales de esa ronda, v3 completa solo el 38 % de las
+  rondas. Por eso los Q del táctico son optimistas y distinguen poco entre opciones.
+  Alternativas, si el usuario las autoriza: sortear los sets de la lista de la Factory (conocimiento de un jugador
+  experto, excluido por la regla estricta), o un rival sorteado más fuerte (p. ej., los mejores movimientos de la
+  especie).
+- El valor de una simulación del táctico usa el *bootstrap* con V_t, para que Q y z estén en las mismas unidades.
+  Sin él (`--t-bootstrap 0`), Q sería P(ganar el siguiente combate) y no se podría mezclar con z.
+- Objetivo de política del táctico: visitas del *halving* frente a softmax(Q/T).
+- Tamaño de la iteración: 40.000 decisiones del combatiente (`--decisions-per-iter`) y 200 iteraciones planeadas.
+- La evaluación por ronda en cada iteración (192 × 6 rachas) para el autojuego mientras dura.

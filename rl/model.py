@@ -123,6 +123,20 @@ class FactoryNet(nn.Module):
         pair_logits = pair_logits.masked_fill(~x["pair_mask"][b, lead], NEG)
         return lead_logits, pair_logits, lead, self.t_value(self._pool(mons, ctx))[:, 0]
 
+    def rental_joint(self, x):
+        """Every lead at once: lead logits [B,6], pair logits [B,6,15] (row l: the pair given lead l, masked; a
+        row of an impossible lead is all masked), value [B]. log pi(lead, pair) = log_softmax(lead)[l] +
+        log_softmax(pair[l])[p], the same factorization as rental()."""
+        mons, ctx, _ = self.tactician_trunk()(x, 1)
+        c6 = ctx[:, None].expand(-1, 6, -1)
+        lead_logits = self.t_lead(torch.cat([mons, c6], -1))[..., 0].masked_fill(~x["lead_mask"], NEG)
+        pair_h = mons[:, self.pairs[:, 0]] + mons[:, self.pairs[:, 1]]           # [B, 15, d]
+        pair_logits = self.t_pair(torch.cat([pair_h[:, None].expand(-1, 6, -1, -1),
+                                             mons[:, :, None].expand(-1, -1, 15, -1),
+                                             ctx[:, None, None].expand(-1, 6, 15, -1)], -1))[..., 0]
+        pair_logits = pair_logits.masked_fill(~x["pair_mask"], NEG)            # [B, 6, 15]
+        return lead_logits, pair_logits, self.t_value(self._pool(mons, ctx))[:, 0]
+
     # ---- tactician: swap (keep, or own slot i x enemy slot j) -> 10 logits ------------------------------------
     def swap(self, x):
         mons, ctx, _ = self.tactician_trunk()(x, 2)

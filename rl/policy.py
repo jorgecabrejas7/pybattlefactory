@@ -1,5 +1,9 @@
-"""Load a trained checkpoint (PPO or Rainbow) as a policy: policy.act(kind, x, greedy) -> actions in the
-format decode_action expects (int, or (lead, pair) for rentals)."""
+"""Load a trained checkpoint (PPO, Rainbow or AlphaZero) as a policy: policy.act(kind, x, greedy) -> actions in the
+format decode_action expects (int, or (lead, pair) for rentals).
+
+PPO and AlphaZero (rl/alphazero.py) checkpoints hold the same FactoryNet: its policy heads act (greedy: argmax;
+otherwise sampled), and value_norm denormalizes its critics. An AlphaZero checkpoint's network acting alone is the
+"network only" policy (no search)."""
 
 import numpy as np
 import torch
@@ -25,9 +29,11 @@ class Policy:
             self.support = {"battle": torch.linspace(a["vmin_b"], a["vmax_b"], a["atoms"], device=device)}
             self.support["rental"] = self.support["swap"] = torch.linspace(a["vmin_t"], a["vmax_t"], a["atoms"],
                                                                            device=device)
-        else:
+        elif self.algo in ("ppo", "alphazero"):
             encode.set_version(a.get("encode_version", 2))     # v1/v2 checkpoints predate the versioned layout
             self.net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "all")).to(device)
+        else:
+            raise ValueError(f"unknown checkpoint algorithm {self.algo!r}")
         self.net.load_state_dict(ck["net"])
         self.net.eval()
 
