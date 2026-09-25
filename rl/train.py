@@ -39,7 +39,7 @@ def parse():
     p.add_argument("--tactician-minibatches", type=int, default=4)
     p.add_argument("--epochs", type=int, default=4)
     p.add_argument("--lr", type=float, default=3e-4)
-    p.add_argument("--gamma-b", type=float, default=0.99)
+    p.add_argument("--gamma-b", type=float, default=1.0, help="battler discount (v3: 1; v1/v2: 0.99)")
     p.add_argument("--gamma-t", type=float, default=1.0)
     p.add_argument("--lam", type=float, default=0.95)
     p.add_argument("--clip", type=float, default=0.2)
@@ -60,8 +60,13 @@ def parse():
     p.add_argument("--beta-anneal-steps", type=float, default=20e6,
                    help="battler steps over which the shaping weight goes linearly from --beta to 0 (0: constant)")
     p.add_argument("--init-from", default=None, help="checkpoint to start from (weights, and optimizer if saved)")
-    p.add_argument("--start-p0", type=float, default=1.0, help="probability a run starts at round 1 (streak 0)")
+    p.add_argument("--start-p0", type=float, default=0.5, help="probability a run starts at round 1 (streak 0)")
     p.add_argument("--start-max-round", type=int, default=5, help="other runs start at streak 7k, k in 1..this")
+    p.add_argument("--target-kl-t", type=float, default=None,
+                   help="tactician: stop an update's epochs once a minibatch's approx KL > 1.5 x this")
+    p.add_argument("--refresh-logp-t", type=int, default=0,
+                   help="tactician: recompute the old log-probs with the network at the start of each update "
+                        "(its batches mix transitions from before its previous update: see ppo_update)")
     return p.parse_args()
 
 
@@ -81,11 +86,15 @@ def main():
     net = FactoryNet(args.d_emb, args.d, args.layers, args.heads, share=args.share).to(device)
     opt = torch.optim.Adam(net.parameters(), lr=args.lr, eps=1e-5)
     b_steps0 = 0
+    norms = {a: (ValueNorm() if args.value_norm else None) for a in ("battler", "tactician")}
     if args.init_from:
         ck = torch.load(args.init_from, map_location=device)
         net.load_state_dict(ck["net"])
         if "opt" in ck:
             opt.load_state_dict(ck["opt"])
+        for agent, state in (ck.get("value_norm") or {}).items():
+            if state and norms.get(agent) is not None:
+                norms[agent].load(state)        # the critic predicts values normalized with these statistics
         b_steps0 = ck.get("battler_steps", 0)
         print(f"initialized from {args.init_from} ({b_steps0:,} battler steps)", flush=True)
     tb.add_text("config", "```\n" + json.dumps(vars(args), indent=2) + "\n```")
@@ -97,7 +106,6 @@ def main():
     bufs = {"battler": AgentBuffer(args.gamma_b, args.lam), "tactician": AgentBuffer(args.gamma_t, args.lam)}
     for b in bufs.values():
         b.ensure(n)
-    norms = {a: (ValueNorm() if args.value_norm else None) for a in ("battler", "tactician")}
     beta_now = args.beta
     last_t_value = np.zeros(n, np.float32)       # the tactician's latest value per env (bootstrap on truncation)
 
@@ -113,6 +121,15 @@ def main():
     t0 = time.time()
     last_log, steps_at_log = time.time(), 0
     update_time = 0.0
+
+    def save(extra=None):
+        """latest.pt (and `extra`), atomically: readers never see half a file. Everything needed to resume or to
+        read values: the network, the optimizer, the value normalization."""
+        ck = {"net": net.state_dict(), "opt": opt.state_dict(), "args": vars(args), "battler_steps": b_steps,
+              "tactician_steps": t_steps, "value_norm": {k: (v.state() if v else None) for k, v in norms.items()}}
+        for name in ("latest.pt",) + ((extra,) if extra else ()):
+            torch.save(ck, os.path.join(run_dir, name + ".tmp"))
+            os.replace(os.path.join(run_dir, name + ".tmp"), os.path.join(run_dir, name))
 
     events = env.reset()
     while b_steps < args.total_battler_steps:
@@ -144,7 +161,12 @@ def main():
                 r, done, trunc = ev["close_t"]
                 t = bufs["tactician"].per_env[i][-1]
                 t.reward, t.done, t.trunc, t.complete = r, done, trunc, True
-                t.next_value = v if kind != "battle" else float(last_t_value[i])
+                if kind != "battle":
+                    t.next_value = v
+                else:
+                    # truncated in a battle: no tactician observation here. Its value at the decision estimated
+                    # all the wins from there, `r` of which are already in the reward: bootstrap with the rest
+                    t.next_value = max(float(last_t_value[i]) - r, 0.0)
             st = ev["stats"]
             if "battle" in st:
                 battles.append(st["battle"])
@@ -184,16 +206,12 @@ def main():
                 tb.add_scalar(f"battler/{k}", v, b_steps)
             tb.add_scalar("battler/batch_size", len(tr), b_steps)
             if b_updates % args.save_every == 0:
-                ck = {"net": net.state_dict(), "opt": opt.state_dict(), "args": vars(args), "battler_steps": b_steps,
-                      "tactician_steps": t_steps,
-                      "value_norm": {k: (v.state() if v else None) for k, v in norms.items()}}
-                for name in ("latest.pt", f"ckpt_{b_steps:011d}.pt"):   # atomic: readers never see half a file
-                    torch.save(ck, os.path.join(run_dir, name + ".tmp"))
-                    os.replace(os.path.join(run_dir, name + ".tmp"), os.path.join(run_dir, name))
+                save(f"ckpt_{b_steps:011d}.pt")
         if bufs["tactician"].n_complete() >= args.tactician_batch:
             tr, adv, ret = bufs["tactician"].take()
             s = ppo_update(net, opt, tr, adv, ret, device, args.epochs, args.tactician_minibatches, args.clip,
-                           args.vf_coef, args.ent_coef, norm=norms["tactician"])
+                           args.vf_coef, args.ent_coef, norm=norms["tactician"], target_kl=args.target_kl_t,
+                           refresh_logp=bool(args.refresh_logp_t))
             t_updates += 1
             for k, v in s.items():
                 tb.add_scalar(f"tactician/{k}", v, b_steps)
@@ -244,7 +262,7 @@ def main():
             last_log, steps_at_log = time.time(), b_steps
             tb.flush()
 
-    torch.save({"net": net.state_dict(), "args": vars(args), "battler_steps": b_steps}, os.path.join(run_dir, "latest.pt"))
+    save()
     env.close()
 
 

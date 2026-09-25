@@ -139,7 +139,7 @@ class FactoryEnv:
             return {"kind": kind, "obs": obs, "close_b": close_b, "close_t": close_t, "truncate": False,
                     "stats": stats}
         view = be.view()
-        phi = potential(be.game, view)
+        phi = potential(be.game, view) if self.beta else 0.0       # (every shaping term is beta * ...)
         truncate = self.decisions >= self.max_decisions
         if self.b_pending:
             r = self.beta * (self.gamma * phi - self.b_phi)

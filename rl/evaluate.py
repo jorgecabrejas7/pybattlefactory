@@ -43,7 +43,8 @@ def summarize(streaks, prefix):
             **{f"{prefix}/reach_round_{k}": float(np.mean(s >= 7 * k)) for k in range(1, 7)}}   # 6 rounds = 42
 
 
-def evaluate_policy(policy, device, make_env, runs_per_env, greedy):
+def evaluate_policy(policy, device, make_env, runs_per_env, greedy, seed=0):
+    torch.manual_seed(seed)                     # the sampled policy's draws are repeatable too
     env = make_env()
     per_env = [[] for _ in range(env.n)]
     events = env.start()

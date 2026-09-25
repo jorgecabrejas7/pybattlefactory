@@ -132,11 +132,21 @@ class ValueNorm:
     def state(self):
         return {"mean": self.mean, "var": self.var, "seen": self.seen}
 
+    def load(self, state):
+        """Restore state() (a checkpoint's value_norm entry)."""
+        self.mean, self.var, self.seen = float(state["mean"]), float(state["var"]), bool(state.get("seen", True))
+
 
 def ppo_update(net, opt, transitions, adv, ret, device, epochs, minibatches, clip=0.2, vf_coef=0.5, ent_coef=0.01,
-               max_grad_norm=0.5, norm=None):
+               max_grad_norm=0.5, norm=None, target_kl=None, refresh_logp=False):
     """One PPO update over a batch that may mix decision kinds (the tactician's rentals and swaps).
-    With `norm`, stored values are in return units and the critic is trained on normalized targets."""
+    With `norm`, stored values are in return units and the critic is trained on normalized targets.
+
+    Stale data: a transition's log-prob is the one of the policy that acted, which can be older than the network
+    at this update (an agent's transitions stay pending until its next decision, and the other agent's updates move
+    shared parameters in between). `stale_kl` measures it before any step. refresh_logp=True recomputes the old
+    log-probs with the network at the start of the update (the trust region is then centred on it; the behaviour
+    policy's mismatch is ignored). target_kl stops the epochs once a minibatch's approx KL exceeds 1.5 x target."""
     n = len(transitions)
     kinds = np.array([t.kind for t in transitions])
     old_logp = torch.tensor([t.logp for t in transitions], device=device)
@@ -154,7 +164,23 @@ def ppo_update(net, opt, transitions, adv, ret, device, epochs, minibatches, cli
         full[kind] = collate([transitions[i].obs for i in idx], device)
         acts_full[kind] = torch.tensor(np.array([transitions[i].action for i in idx]), device=device)
     stats = {k: [] for k in ("policy_loss", "value_loss", "entropy", "approx_kl", "clip_frac", "grad_norm")}
+    with torch.no_grad():                       # the network before this update vs the policies that acted
+        cur = torch.empty(n, device=device)
+        for kind in full:
+            idx = np.nonzero(kinds == kind)[0]
+            for chunk in np.array_split(np.arange(len(idx)), max(1, len(idx) // 4096)):
+                p = torch.tensor(chunk, device=device)
+                lp, _, _ = evaluate(net, kind, {k: t[p] for k, t in full[kind].items()}, acts_full[kind][p])
+                cur[torch.tensor(idx[chunk], device=device)] = lp
+        lr0 = cur - old_logp
+        stale_kl = float(((torch.exp(lr0) - 1) - lr0).mean())
+        stale_frac = float(((torch.exp(lr0) - 1).abs() > clip).float().mean())
+        if refresh_logp:
+            old_logp = cur
+    stopped = 0
     for _ in range(epochs):
+        if stopped:
+            break
         perm = np.random.permutation(n)
         for mb in np.array_split(perm, minibatches):
             logp_l, ent_l, v_l, idx_l = [], [], [], []
@@ -182,7 +208,11 @@ def ppo_update(net, opt, transitions, adv, ret, device, epochs, minibatches, cli
                 stats["clip_frac"].append(((ratio - 1).abs() > clip).float().mean().item())
             stats["policy_loss"].append(pl.item()); stats["value_loss"].append(vl.item())
             stats["entropy"].append(ent.mean().item()); stats["grad_norm"].append(float(gn))
+            if target_kl is not None and stats["approx_kl"][-1] > 1.5 * target_kl:
+                stopped = 1
+                break
     out = {k: float(np.mean(v)) for k, v in stats.items()}
+    out["stale_kl"], out["stale_clip_frac"], out["early_stop"] = stale_kl, stale_frac, float(stopped)
     var = np.var(ret)
     out["explained_variance"] = float(1 - np.var(ret - old_v) / var) if var > 0 else 0.0
     out["adv_mean"], out["return_mean"], out["value_mean"] = float(adv.mean()), float(ret.mean()), float(old_v.mean())
