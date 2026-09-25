@@ -485,3 +485,32 @@ Conclusión:
 **Implicación para AlphaZero:** el objetivo de valor *z* (resultado de un combate) es muy ruidoso. Conviene mezclarlo
 con el valor de la raíz de la búsqueda, que es menos ruidoso, y vigilar el sobreajuste a los datos del buffer:
 reutilizar pocas veces cada muestra y comprobar el crítico con combates de validación.
+
+---
+
+## 15b. Comparación de la búsqueda, repetida tras las correcciones (2026-09-25)
+
+Checkpoint final de v3. Evaluación por ronda con las mismas semillas, un entorno nuevo por racha y la búsqueda ya
+corregida:
+- redibuja el turno del rival (sin fuga de su acción);
+- usa la determinización estricta de jugador.
+
+Hojas evaluadas con el servidor de GPU. P(completar la ronda) en %.
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | ≈ P(6 rondas) | ms por decisión |
+|---|---|---|---|---|---|---|---|---|
+| Red sola (608 rachas/ronda) | 68,8 | 70,2 | 38,8 | 57,6 | 21,9 | 19,4 | 0,46 % | 1,4 |
+| MCTS legal 256 (608) | 71,2 | 72,0 | 39,3 | 59,4 | 23,5 | 23,2 | 0,65 % | 24,9 |
+| MCTS legal 1.024 (320) | 72,2 | 71,9 | 42,8 | 59,4 | 23,4 | 21,6 | 0,67 % | 78,5 |
+| Información perfecta 256 (608) | 70,6 | 72,5 | 42,1 | 60,2 | 24,3 | 24,5 | 0,77 % | 25,5 |
+
+Lectura:
+- **La búsqueda legal sigue mejorando en las 6 rondas**, pero **mucho menos** que en la tabla contaminada: +0,5 a +4
+  puntos por ronda. Ninguna ronda es significativa por separado (z < 2), pero el signo es positivo en las 6
+  (p ≈ 0,016 en una prueba de signos; z combinado ≈ 1,9).
+- Buena parte de la mejora anterior venía de conocer la acción del rival.
+- **1.024 simulaciones no mejoran sobre 256.** Profundizar más no ayuda; el límite está en la **calidad del valor y la
+  política de la red** que guían la búsqueda. Es justo lo que mejora *expert iteration*.
+- La información perfecta ayuda algo (0,77 % frente a 0,65 %; es la variante más clara, z combinado ≈ 3,2). Esa es la
+  pérdida por no conocer lo oculto con el sorteo estricto.
+- Hubo 13 errores de búsqueda en ~100 k decisiones (se juega la acción de la red): están por investigar.
