@@ -388,7 +388,16 @@ Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
   | MCTS legal 1.024 | 72,2 | 74,4 | 48,8 | 67,8 | 24,4 | 27,2 | 1,18 % |
   | Información perfecta 256 (techo) | 72,9 | 72,7 | 39,8 | 65,8 | 26,6 | 23,2 | 0,86 % |
 
-  Lectura:
+  **⚠ Resultados invalidados (revisión de código, 2026-09-25).** Cuando el jugador decide, la IA rival ya ha elegido
+  su acción del turno (`gChosenActionByBattler[1]`, `gChosenMoveByBattler[1]`…). El clon + `determinize` + `set_rng`
+  no la borraba, así que **la búsqueda, también en modo legal, conocía de antemano la acción del rival**:
+  - la copia cambia de Pokémon el 94 % de las veces si el rival real iba a cambiar, y el 0 % si no;
+  - el movimiento coincide el 96 % de las veces.
+
+  Por eso legal ≈ perfect. Hay que repetir la tabla tras corregirlo. El entrenamiento PPO no se ve afectado,
+  porque no usa búsqueda.
+
+  Lectura original (pendiente de confirmar):
   - la búsqueda mejora todas las rondas con 256 simulaciones (+2 a +7 puntos) y más aún con 1.024 (hasta +11);
   - con 64 simulaciones apenas aporta;
   - conocer la información oculta no mejora sobre el modo legal: el límite está en la profundidad de la búsqueda y en
@@ -407,3 +416,35 @@ Pendiente (se suman a la lista de abajo):
     (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden de los ids, así que hoy se aplican al revés);
   - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
 - **Entrenar con búsqueda** (expert iteration, solo en modo legal).
+
+---
+
+## 16. Prueba de capacidad de la red (`rl/capacity_test.py`, 2026-09-25)
+
+Datos: 1,49 M decisiones del combatiente y 117 k del táctico, jugadas con v3. Se entrenó **solo el crítico, desde
+cero**, sobre esos datos fijos, con la red actual (1,3 M parámetros) y una ancha (d = 256, 3 capas, 5,9 M).
+La validación se hace con **combates y rachas completos que no se ven en el entrenamiento**.
+
+La primera versión separaba por decisión. Daba 0,84 frente a 0,91 de varianza explicada, pero era **memorización**:
+las decisiones de un mismo combate comparten el mismo resultado, así que la validación contenía combates ya vistos.
+
+Varianza explicada en entrenamiento / en validación (por combate o racha):
+
+| | Época 1 | Época 4 | Época 12 |
+|---|---|---|---|
+| Combatiente, red actual | 0,48 / **0,21** | 0,73 / 0,02 | 0,91 / −0,12 |
+| Combatiente, red ancha | 0,48 / 0,18 | 0,78 / 0,00 | 0,96 / −0,14 |
+| Táctico, red actual | 0,11 / 0,10 | 0,14 / **0,13** | 0,22 / 0,10 |
+| Táctico, red ancha | 0,11 / 0,11 | 0,14 / 0,13 | 0,19 / 0,11 |
+
+Conclusión:
+- **La red actual no se queda corta.** La ancha no generaliza mejor, y ambas memorizan en cuanto se entrena más.
+- El límite es el **ruido del objetivo**: un solo resultado por combate o racha. Lo generalizable de él cabe en la red
+  actual.
+
+**Decisión** (regla del usuario: agrandar solo si la prueba sale positiva): **alphazero_v1 mantiene el tamaño actual**
+(d = 128, 2 capas), con tasa de aprendizaje *cosine*.
+
+**Implicación para AlphaZero:** el objetivo de valor *z* (resultado de un combate) es muy ruidoso. Conviene mezclarlo
+con el valor de la raíz de la búsqueda, que es menos ruidoso, y vigilar el sobreajuste a los datos del buffer:
+reutilizar pocas veces cada muestra y comprobar el crítico con combates de validación.
