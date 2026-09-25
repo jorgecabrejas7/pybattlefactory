@@ -23,6 +23,13 @@ The decision is the argmax of the root visits summed over the K trees.
 The C++ side (Gen3Game.sim_step / set_rng / determinize, MctsTree) is used when the extension has it; otherwise
 sim_step and set_rng fall back to run() / a write of gRngValue, and the tree to PyMctsTree (same interface).
 Legal mode needs Gen3Game.determinize.
+
+impl="cpp" (the default when the extension has Searcher, src/gen3/search.cpp) runs the same loop in C++: the roots
+are prepared here (determinization, redraws, rebase, set_rng: same RNG draws), then every node's clone / sim_step /
+observe / encode and the tree bookkeeping happen in C++, and the network is called once per batch with the stacked
+numpy arrays (evaluate_batch). Node observers are the C++ ObsMemory when the extension has it (observer="cpp"), or
+the Python BattleObserver + rl.encode.battle called from C++ (observer="python"). Same selection and backup order
+as impl="python", so both give the same visits for the same seeds (tests/python/test_search_cpp.py).
 """
 
 import math
@@ -44,6 +51,14 @@ try:
     from pybattle.pybattle_native import MctsTree as NativeMctsTree
 except ImportError:                     # pragma: no cover - depends on the build
     NativeMctsTree = None
+try:
+    from pybattle.pybattle_native import Searcher as NativeSearcher
+except ImportError:                     # pragma: no cover - depends on the build
+    NativeSearcher = None
+try:
+    from pybattle.pybattle_native import ObsMemory as NativeObsMemory
+except ImportError:                     # pragma: no cover - depends on the build
+    NativeObsMemory = None
 
 ACTION, SWITCH, BATTLE_OVER, TIMEOUT = 1, 2, 3, 4
 OUTCOME_WON = 1
@@ -221,7 +236,12 @@ def to_backend_action(a: int):
 
 class SearchBattler:
     def __init__(self, policy, n_sims=256, n_determinizations=8, c_puct=1.5, batch=32, mode="legal",
-                 allow_perfect=False, seed=0, max_decisions=MAX_DECISIONS, virtual_loss=1.0, native_tree=None):
+                 allow_perfect=False, seed=0, max_decisions=MAX_DECISIONS, virtual_loss=1.0, native_tree=None,
+                 impl=None, observer="auto", evaluator=None):
+        """impl: "cpp" | "python" | None (cpp when built and the native tree is not refused). observer (cpp impl):
+        "cpp" (ObsMemory) | "python" (BattleObserver called from C++) | "auto". evaluator: optional
+        f(batch dict of numpy arrays) -> (priors [B, 7], values [B] in [0, 1]) replacing the policy's network
+        (tests, an inference server)."""
         if mode not in ("legal", "perfect"):
             raise ValueError(f"mode must be 'legal' or 'perfect', not {mode!r}")
         if mode == "perfect":
@@ -231,27 +251,59 @@ class SearchBattler:
                 raise PermissionError("perfect-information search is never allowed in training")
         if mode == "legal" and not HAS_DETERMINIZE:
             raise RuntimeError("legal-mode search needs Gen3Game.determinize (rebuild the extension)")
-        self.policy, self.net, self.device = policy, policy.net, policy.device
+        if impl is None:
+            impl = "cpp" if NativeSearcher is not None and native_tree is not False else "python"
+        if impl not in ("cpp", "python"):
+            raise ValueError(f"impl must be 'cpp' or 'python', not {impl!r}")
+        if impl == "cpp":
+            if NativeSearcher is None:
+                raise RuntimeError("impl='cpp' needs pybattle_native.Searcher (rebuild the extension)")
+            if native_tree is False:
+                raise ValueError("impl='cpp' always uses the native MctsTree")
+        if observer == "auto":
+            observer = "cpp" if NativeObsMemory is not None else "python"
+        if observer not in ("cpp", "python"):
+            raise ValueError(f"observer must be 'cpp', 'python' or 'auto', not {observer!r}")
+        if impl == "cpp" and observer == "cpp" and NativeObsMemory is None:
+            raise RuntimeError("observer='cpp' needs pybattle_native.ObsMemory (rebuild the extension)")
+        self.impl, self.observer = impl, observer if impl == "cpp" else "python"
+        self._evaluator = evaluator
+        self.policy = policy
+        self.net = getattr(policy, "net", None)
+        self.device = getattr(policy, "device", "cpu")
         norm = (getattr(policy, "value_norm", None) or {}).get("battler")
         self.v_mean, self.v_std = (norm["mean"], max(norm["var"], 1e-4) ** 0.5) if norm else (0.0, 1.0)
         self.n_sims, self.K, self.c_puct, self.batch = n_sims, n_determinizations, c_puct, batch
         self.mode, self.max_decisions = mode, max_decisions
         self.rng = random.Random(seed)
         self.trees = [make_tree(c_puct, virtual_loss, native_tree) for _ in range(self.K)]
+        self.searcher = NativeSearcher(n_sims, batch, c_puct, virtual_loss, max_decisions) if impl == "cpp" else None
         self.last_stats = None
         self.n_decisions, self.total_ms, self.total_leaves, self.errors, self.redrawn = 0, 0.0, 0, 0, 0
         self.redraws = 8
+        self._net_calls, self._eval_ms = 0, 0.0
 
     # --- network ---------------------------------------------------------------------------------------------
 
-    @torch.no_grad()
     def evaluate(self, obs_list):
         """Encoded battle observations -> (priors [n, 7], values [n] in [0, 1])."""
-        x = encode.collate(obs_list, self.device)
-        logits, v = self.net.battler(x)
-        pri = torch.softmax(logits.float(), -1).cpu().numpy()
-        val = (v.float() * self.v_std + self.v_mean).clamp(0.0, 1.0).cpu().numpy()
-        return pri, val
+        return self.evaluate_batch({k: np.stack([o[k] for o in obs_list]) for k in obs_list[0]})
+
+    @torch.no_grad()
+    def evaluate_batch(self, batch):
+        """A stacked batch (dict of numpy arrays, as encode.collate stacks them) -> (priors float32 [n, 7],
+        values float32 [n] in [0, 1]). The C++ search calls this once per batch."""
+        t = time.perf_counter()
+        if self._evaluator is not None:
+            pri, val = self._evaluator(batch)
+        else:
+            x = {k: torch.from_numpy(v).to(self.device, non_blocking=True) for k, v in batch.items()}
+            logits, v = self.net.battler(x)
+            pri = torch.softmax(logits.float(), -1).cpu().numpy()
+            val = (v.float() * self.v_std + self.v_mean).clamp(0.0, 1.0).cpu().numpy()
+        self._net_calls += 1
+        self._eval_ms += (time.perf_counter() - t) * 1000
+        return np.asarray(pri, np.float32), np.asarray(val, np.float32)
 
     # --- tree nodes ------------------------------------------------------------------------------------------
 
@@ -277,9 +329,14 @@ class SearchBattler:
                 continue
             return ("node", view, ndec)
 
-    def _roots(self, backend, view, known, forced):
-        """K root states: (game, observer)."""
+    def _roots(self, backend, view, known, forced, native_obs=False):
+        """K root states: (game, observer). native_obs: the observers are C++ ObsMemory copies."""
         roots = []
+        if native_obs:
+            base = NativeObsMemory.from_python(backend._observer)
+            copy_obs = base.copy
+        else:
+            copy_obs = backend._observer.fast_copy
         info = backend.game.factory_info
         dctx = None
         if self.mode == "legal":
@@ -291,7 +348,7 @@ class SearchBattler:
             ids = set(known.own_ids) if known is not None and known.own_ids else set(own_set_ids(backend.game))
         truth = (backend.game.unusable_moves(0), backend.game.can_switch(0))
         for _ in range(self.K):
-            obs = backend._observer.fast_copy()
+            obs = copy_obs()
             if self.mode == "legal":
                 # what the player can do now is visible (the game refuses a trapped switch / a disabled move):
                 # redraw determinizations that would change it (e.g. a Shadow Tag / Arena Trap ability drawn)
@@ -317,6 +374,7 @@ class SearchBattler:
         known: a determinize.ExclusionTracker fed with the rental / swap screens (else our team's species only);
         decisions: decisions already taken in this battle (truncation at max_decisions)."""
         t0 = time.perf_counter()
+        self._net_calls, self._eval_ms = 0, 0.0
         if backend.phase not in (Phase.BATTLE, Phase.FORCED_SWITCH):
             raise RuntimeError(f"not at a battle decision: {backend.phase}")
         forced = backend.phase == Phase.FORCED_SWITCH
@@ -331,7 +389,16 @@ class SearchBattler:
             self._record(t0, a, np.eye(N_ACTIONS)[a], np.zeros(N_ACTIONS), root_p, root_v, 0, 0)
             return to_backend_action(a)
 
-        roots = self._roots(backend, view, known, forced)
+        roots = self._roots(backend, view, known, forced, native_obs=self.impl == "cpp" and self.observer == "cpp")
+        if self.impl == "cpp":
+            r = self.searcher.search([(g, obs, decisions) for g, obs in roots], ctx, root_p.tolist(),
+                                     legal.tolist(), root_v, self.evaluate_batch)
+            self.errors += r["errors"]
+            visits, q = np.asarray(r["visits"], float), np.asarray(r["q"], float)
+            score = np.where(legal, visits + 1e-6 * root_p, -1.0)
+            a = int(np.argmax(score))
+            self._record(t0, a, visits, q, root_p, root_v, r["leaves"], r["nodes"], ms_cpp=r["ms_cpp"])
+            return to_backend_action(a)
         states, terms = [], []
         for k, (g, obs) in enumerate(roots):
             t = self.trees[k]
@@ -413,11 +480,13 @@ class SearchBattler:
         self._record(t0, a, visits, q, root_p, root_v, leaves, nodes)
         return to_backend_action(a)
 
-    def _record(self, t0, a, visits, q, prior, value, leaves, nodes):
+    def _record(self, t0, a, visits, q, prior, value, leaves, nodes, ms_cpp=None):
         ms = (time.perf_counter() - t0) * 1000
         self.last_stats = {"action": a, "visits": [float(x) for x in visits], "q": [float(x) for x in q],
                            "prior": [float(x) for x in prior], "value": value, "leaves": leaves, "nodes": nodes,
-                           "ms": ms, "searched": leaves > 0 or nodes > 0, "errors": self.errors}
+                           "ms": ms, "searched": leaves > 0 or nodes > 0, "errors": self.errors,
+                           "impl": self.impl, "net_calls": self._net_calls, "ms_eval": self._eval_ms,
+                           "ms_cpp": ms_cpp}
         self.n_decisions += 1
         self.total_ms += ms
         self.total_leaves += leaves

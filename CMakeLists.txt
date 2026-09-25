@@ -33,8 +33,11 @@ add_library(gen3 STATIC
     src/gen3/host.c
     src/gen3/factory_run.c
     src/gen3/search_host.c
+    src/gen3/observer_host.c
+    src/gen3/observer.cpp
     src/gen3/game.cpp
     src/gen3/mcts.cpp
+    src/gen3/search.cpp
     src/gen3/generated/stubs.c
     src/gen3/generated/rom_script_tables.c
     src/gen3/generated/rom_layout_check.c
@@ -69,7 +72,7 @@ if(BUILD_PYTHON_BINDINGS)
     )
     FetchContent_MakeAvailable(pybind11)
 
-    pybind11_add_module(pybattle_native src/python/bindings.cpp)
+    pybind11_add_module(pybattle_native src/python/bindings.cpp src/python/search_bindings.cpp src/python/observer_bindings.cpp)
     target_link_libraries(pybattle_native PRIVATE battle_sim gen3)
     if(NOT MSVC)
         target_link_options(pybattle_native PRIVATE -static-libgcc -static-libstdc++)

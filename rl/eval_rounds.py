@@ -10,7 +10,9 @@ In-process mode (the battler sees the backend: decision-time search), one checkp
 Same protocol and seeds as eval_round (environment j of round k: seed (seed + 1000k) * 100_003 + j, streak 7(k-1),
 FactoryEnv skipping decisions without a choice), tactician = the network (greedy), battler = the network (greedy,
 --battler net) or rl.search.SearchBattler (--battler search). Environments are split over --procs forked workers,
-each with its own network copy (--device, CPU by default). --mode perfect is the information ceiling (evaluation
+each with its own network copy (--device, CPU by default), or, with --inference gpu, all sharing one GPU inference
+server (rl/inference.py: the battler network, for --battler net and search; the tactician stays on the workers'
+CPU copy). --mode perfect is the information ceiling (evaluation
 only). Reports per round complete / battle rates and the battler's ms per decision.
 
 For each round k = 1..6, runs start at the beginning of round k (streak 7(k-1), random feasible rental counter,
@@ -77,17 +79,28 @@ def eval_round(policy, device, k, n_runs, workers=4, envs_per_worker=8, seed=777
 
 # ---- in-process mode ---------------------------------------------------------------------------------------------
 
-def net_battler(policy):
-    """The network's greedy battler as a battler callable: (env, event) -> backend action."""
+def net_battler(policy, evaluator=None):
+    """The network's greedy battler as a battler callable: (env, event) -> backend action. evaluator: a batch
+    evaluator (rl.inference, e.g. a GPU server client) used instead of the policy's own network."""
     def act(env, ev, known=None):
-        a = policy.act("battle", encode.collate([ev["obs"]], policy.device), greedy=True)[0]
+        if evaluator is not None:
+            from .inference import stack_obs
+            pri, _ = evaluator(stack_obs([ev["obs"]]))
+            a = int(np.argmax(pri[0]))
+        else:
+            a = policy.act("battle", encode.collate([ev["obs"]], policy.device), greedy=True)[0]
         return decode_action("battle", a)
     return act
 
 
-def search_battler(policy, **kw):
+def search_battler(policy, evaluator=None, **kw):
+    import inspect
     from .search import SearchBattler
-    sb = SearchBattler(policy, **kw)
+    native_ev = evaluator is not None and "evaluator" in inspect.signature(SearchBattler).parameters
+    sb = SearchBattler(policy, **(dict(kw, evaluator=evaluator) if native_ev else kw))
+    if evaluator is not None and not native_ev:   # leaves evaluated by the batch evaluator (GPU server client)
+        from .inference import obs_evaluator
+        sb.evaluate = obs_evaluator(evaluator)
 
     def act(env, ev, known=None):
         return sb.act_on(env.backend, known=known, decisions=env.decisions - 1)
@@ -145,11 +158,15 @@ def play_env(env_seed, k, n_runs, policy, battler, stats):
     return out
 
 
+_SERVER = None                                  # the GPU inference server, set before forking the workers
+
+
 def _worker(args):
-    (ckpt, device, battler_kind, kw, k, env_seeds, n_runs, threads) = args
+    (ckpt, device, battler_kind, kw, k, env_seeds, n_runs, threads, slot) = args
     torch.set_num_threads(threads)
     policy = Policy(ckpt, torch.device(device))
-    battler = net_battler(policy) if battler_kind == "net" else search_battler(policy, **kw)
+    ev = _SERVER.client(slot).evaluate if _SERVER is not None else None
+    battler = net_battler(policy, ev) if battler_kind == "net" else search_battler(policy, ev, **kw)
     stats = {"ms": 0.0, "decisions": 0}
     runs = []
     for s in env_seeds:
@@ -160,21 +177,29 @@ def _worker(args):
 
 
 def eval_round_inprocess(ckpt, k, n_runs, battler="net", search_kw=None, workers=4, envs_per_worker=8, seed=777,
-                         procs=1, device="cpu", threads=1):
-    """eval_round with a battler that sees the backend. Returns complete / battle / n / ms_per_decision."""
+                         procs=1, device="cpu", threads=1, server=None):
+    """eval_round with a battler that sees the backend. Returns complete / battle / n / ms_per_decision.
+    server: an rl.inference.InferenceServer with >= procs client slots (the battler's network on the GPU)."""
     import multiprocessing as mp
+    global _SERVER
     n_env = workers * envs_per_worker
     base = seed + 1000 * k                      # VecEnv(seed=seed + 1000k): env j gets base * 100_003 + j
     seeds = [base * 100_003 + j for j in range(n_env)]
     target = int(np.ceil(n_runs / n_env))
     kw = dict(search_kw or {})
     jobs = [(ckpt, device, battler, dict(kw, seed=kw.get("seed", 0) + 7919 * p + 104729 * k), k, seeds[p::procs],
-             target, threads) for p in range(procs)]
-    if procs == 1:
-        results = [_worker(jobs[0])]
-    else:
-        with mp.get_context("fork").Pool(procs) as pool:
-            results = pool.map(_worker, jobs)
+             target, threads, p) for p in range(procs)]
+    if server is not None and server.n_clients < procs:
+        raise ValueError(f"the inference server has {server.n_clients} client slots, {procs} workers")
+    _SERVER = server
+    try:
+        if procs == 1:
+            results = [_worker(jobs[0])]
+        else:
+            with mp.get_context("fork").Pool(procs) as pool:
+                results = pool.map(_worker, jobs)
+    finally:
+        _SERVER = None
     done = [r for res, _ in results for r in res]
     ms = sum(st["ms"] for _, st in results)
     dec = sum(st["decisions"] for _, st in results)
@@ -197,18 +222,32 @@ def main_inprocess(args):
     if args.battler == "search":
         kw = {"n_sims": args.sims, "n_determinizations": args.dets, "c_puct": args.c_puct, "batch": args.batch,
               "mode": args.mode, "allow_perfect": args.mode == "perfect", "seed": args.seed}
+        if args.impl:
+            kw["impl"] = args.impl
     res = {"ckpt": args.ckpt, "battler": args.battler, "search": kw, "runs": args.runs, "seed": args.seed,
            "rounds": {}}
-    for k in _rounds(args.rounds):
-        t0 = time.time()
-        r = eval_round_inprocess(args.ckpt, k, args.runs, args.battler, kw, seed=args.seed, procs=args.procs,
-                                 device=args.device, threads=args.threads)
-        r["seconds"] = time.time() - t0
-        res["rounds"][k] = r
-        print(f"round {k}: complete {r['complete']:.3f} battle {r['battle']:.3f} n {r['n']} "
-              f"{r['ms_per_decision']:.1f} ms/decision ({r['seconds']:.0f} s)", flush=True)
-        if args.out:
-            json.dump(res, open(args.out, "w"), indent=1)
+    server = None
+    if args.inference == "gpu":
+        from .inference import InferenceServer
+        server = InferenceServer(args.ckpt, n_clients=args.procs, deadline_ms=args.deadline_ms,
+                                 precision=args.precision)
+        res["inference"] = {"kind": "gpu", "deadline_ms": args.deadline_ms, "precision": args.precision}
+    try:
+        for k in _rounds(args.rounds):
+            t0 = time.time()
+            r = eval_round_inprocess(args.ckpt, k, args.runs, args.battler, kw, seed=args.seed, procs=args.procs,
+                                     device=args.device, threads=args.threads, server=server)
+            r["seconds"] = time.time() - t0
+            if server is not None:
+                r["inference"] = server.stats()
+            res["rounds"][k] = r
+            print(f"round {k}: complete {r['complete']:.3f} battle {r['battle']:.3f} n {r['n']} "
+                  f"{r['ms_per_decision']:.1f} ms/decision ({r['seconds']:.0f} s)", flush=True)
+            if args.out:
+                json.dump(res, open(args.out, "w"), indent=1)
+    finally:
+        if server is not None:
+            server.close()
     if not args.out:
         print(json.dumps(res, indent=1))
     return res
@@ -220,6 +259,7 @@ def main():
     p.add_argument("--ckpt", default=None, help="in-process mode: one checkpoint")
     p.add_argument("--battler", choices=("net", "search"), default="net")
     p.add_argument("--sims", type=int, default=256)
+    p.add_argument("--impl", default=None, choices=["cpp", "python"], help="search implementation (default: cpp)")
     p.add_argument("--dets", type=int, default=8, help="determinizations (trees) per decision")
     p.add_argument("--c-puct", type=float, default=1.5)
     p.add_argument("--batch", type=int, default=32)
@@ -227,7 +267,11 @@ def main():
     p.add_argument("--rounds", default="1-6")
     p.add_argument("--procs", type=int, default=1)
     p.add_argument("--threads", type=int, default=1, help="torch threads per worker")
-    p.add_argument("--device", default="cpu")
+    p.add_argument("--device", default="cpu", help="the workers' network copies (tactician; battler unless --inference gpu)")
+    p.add_argument("--inference", choices=("cpu", "gpu"), default="cpu",
+                   help="gpu: the battler network runs in one shared GPU inference server (rl/inference.py)")
+    p.add_argument("--deadline-ms", type=float, default=0.75, help="--inference gpu: batching window")
+    p.add_argument("--precision", choices=("fp32", "bf16"), default="fp32", help="--inference gpu")
     p.add_argument("--seed", type=int, default=777)
     p.add_argument("--out", default=None)
     p.add_argument("--steps", default=None, help="comma list of battler steps; nearest checkpoint each")

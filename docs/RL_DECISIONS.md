@@ -332,3 +332,76 @@ Comando:
 python -m rl.train --name ppo_joint_v3 --gamma-b 1.0 --start-p0 0.5 --start-max-round 5 --share embeddings \
     --value-norm 1 --beta 0.5 --beta-anneal-steps 20e6 --encode-version 3
 ```
+
+---
+
+## 15. Búsqueda MCTS para el combatiente (`rl/search.py` + C++)
+
+Motivo: PPO explora con ruido independiente en cada turno, así que casi nunca prueba planes de varios turnos.
+La búsqueda los evalúa de forma explícita. Antes se comprobó con una regla forzada (`rl/forced_rules.py`) que
+**forzar Doble Equipo hasta +2 empeora** (−4 a −8 puntos de victoria en los combates donde actúa, rondas 2–5) y que
+Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
+
+- **Algoritmo:** MCTS determinizado en conjunto.
+  - K árboles (por defecto 8), cada uno con la información oculta sorteada y una semilla de azar fijas.
+  - PUCT con pérdida virtual, lotes de 32 hojas y N simulaciones repartidas entre los árboles.
+  - Las hojas se evalúan con la red PPO: priors de la política y valor del crítico desnormalizado ≈ P(ganar).
+  - Las hojas terminales valen 1 o 0; en 300 decisiones se trunca y se usa el valor de la red.
+  - Decisión = argmax de las visitas sumadas en la raíz.
+- **Modos:**
+  - **legal** (el que cuenta): la información oculta se sortea con lo que sabe un jugador (`rl/determinize.py`):
+    - sets compatibles con lo revelado;
+    - Pokémon no vistos sacados del grupo de la ronda, con las mismas exclusiones que `GenerateOpponentMons`;
+    - habilidad 50/50;
+    - IVs de 3/6 y la regla de Noland;
+    - PS exactos dentro de la barra;
+    - contadores de sueño y confusión sorteados de nuevo.
+  - **perfect**: el estado real. **Solo es un techo de referencia; está prohibido en el entrenamiento**
+    (`mark_training()` en `rl/train*.py` más una comprobación en `SearchBattler`).
+- **Implementación:**
+  - C++ (`src/gen3/`):
+    - `sim_step`, `determinize`, `set_rng`;
+    - `MctsTree`;
+    - un observador y codificador v3 **idénticos bit a bit** a los de Python (`ObsMemory`: 19.279 comparaciones, 0 diferencias);
+    - el bucle `Searcher`, que llama a la red en Python una vez por lote.
+  - Servidor de inferencia en GPU opcional (`rl/inference.py`): agrupa las hojas de todos los procesos.
+  - Las implementaciones Python y C++ dan las **mismas visitas y la misma acción** con las mismas semillas.
+- **Velocidad** (máquina libre, 18 procesos, ronda 3, 256 simulaciones, K = 8; las tres versiones dan resultados idénticos):
+
+  | Implementación | ms por decisión | vs Python |
+  |---|---|---|
+  | Python, red en CPU | 176,8 | 1× |
+  | C++, red en CPU | 47,8 | 3,7× |
+  | C++, servidor de red en GPU | 28,1 (25,2 con lotes de 128) | 6,3–7× |
+  | C++ + GPU con 64 simulaciones | 14,3 | — |
+
+  Lo que queda es la preparación de las raíces en Python (sorteo de K determinizaciones, `from_python`, raíz;
+  ~9 ms) y la latencia de ida y vuelta al servidor.
+- **Resultados** (checkpoint final de v3, evaluación por ronda con las mismas semillas y un entorno nuevo por racha;
+  P(completar la ronda) en %; 608 rachas por ronda salvo 64 y 1.024, con 320):
+
+  | | R1 | R2 | R3 | R4 | R5 | R6 | Producto ≈ P(6 rondas) |
+  |---|---|---|---|---|---|---|---|
+  | Red sola | 68,8 | 70,2 | 38,0 | 57,6 | 21,9 | 18,6 | 0,43 % |
+  | MCTS legal 64 | 73,8 | 69,7 | 39,7 | 58,8 | 19,4 | 20,0 | 0,46 % |
+  | MCTS legal 256 | 71,4 | 74,3 | 43,6 | 64,3 | 26,5 | 20,7 | 0,82 % |
+  | MCTS legal 1.024 | 72,2 | 74,4 | 48,8 | 67,8 | 24,4 | 27,2 | 1,18 % |
+  | Información perfecta 256 (techo) | 72,9 | 72,7 | 39,8 | 65,8 | 26,6 | 23,2 | 0,86 % |
+
+  Lectura:
+  - la búsqueda mejora todas las rondas con 256 simulaciones (+2 a +7 puntos) y más aún con 1.024 (hasta +11);
+  - con 64 simulaciones apenas aporta;
+  - conocer la información oculta no mejora sobre el modo legal: el límite está en la profundidad de la búsqueda y en
+    la calidad de la red, no en la información oculta.
+- **Limitaciones conocidas:**
+  - no se vuelven a sortear algunos contadores ocultos (Atadura, Enfado, Alboroto, temporizadores de Anulación y Otra Vez);
+  - los candidatos de Noland son un superconjunto ligero de los reales;
+  - fallos de reproducibilidad de `FactoryEnv.reset()`: la evaluación usa un entorno nuevo por racha.
+
+Pendiente (se suman a la lista de abajo):
+- **Codificación v4:**
+  - corregir los IVs rivales en `rl/damage.py` (3/6 y la regla de Noland);
+  - corregir **las especies de Hueso Grueso y Bola Luminosa** (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden
+    de los ids, así que hoy Hueso Grueso se aplica a Pikachu y Cubone, y Bola Luminosa a Marowak);
+  - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
+- **Entrenar con búsqueda** (expert iteration, solo en modo legal).

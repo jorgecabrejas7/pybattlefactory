@@ -12,6 +12,9 @@
 namespace py = pybind11;
 using namespace pkmn;
 
+void bind_search(py::module_& m);   // src/python/search_bindings.cpp
+void bind_observer(py::module_& m); // src/python/observer_bindings.cpp
+
 PYBIND11_MODULE(pybattle_native, m) {
     m.doc() = "Pokemon Emerald Battle Simulator";
 
@@ -274,5 +277,7 @@ PYBIND11_MODULE(pybattle_native, m) {
         .def_property_readonly("n_actions", &MctsTree::nActions)
         .def_property_readonly("c_puct", &MctsTree::cPuct)
         .def_property_readonly("virtual_loss", &MctsTree::virtualLoss);
+    bind_observer(m);
+    bind_search(m);
     m.attr("Gen3Battle") = gen3;  // older name
 }

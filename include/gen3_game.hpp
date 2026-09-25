@@ -72,6 +72,9 @@ public:
     struct DetSlot { int partySlot, setId, iv, abilityBit; float hpFraction; };
     void determinize(const std::vector<DetSlot>& slots, int64_t hiddenSeed);
 
+    // Make this game's state the live battle RAM (for direct readers such as the C++ observer).
+    void makeLive() { activate(); }
+
 private:
     void activate();
     std::vector<uint8_t> m_state;

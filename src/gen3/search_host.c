@@ -297,3 +297,16 @@ int Gen3Search_Determinize(const struct Gen3DetSlot *slots, int count, int64_t h
     }
     return 0;
 }
+
+int Gen3Search_HasChoice(uint8_t unusable, int canSwitch)
+{
+    int i;
+    for (i = 0; i < MAX_MON_MOVES; i++)
+        if (gBattleMons[0].moves[i] != MOVE_NONE && !((unusable >> i) & 1))
+            return 1;
+    if (canSwitch)
+        for (i = 0; i < 3; i++)
+            if (i != gBattlerPartyIndexes[0] && GetMonData(&gPlayerParty[i], MON_DATA_HP, NULL) > 0)
+                return 1;
+    return 0;
+}

@@ -26,6 +26,11 @@ uint8_t Gen3_BattleOutcome(void);   // gBattleOutcome (0 while the battle runs)
 // Returns 0 on success, -1 on a bad spec (nothing is changed then).
 int Gen3Search_Determinize(const struct Gen3DetSlot *slots, int count, int64_t hiddenSeed);
 
+// At an ACTION decision of the live game: 1 if the player has a usable move (a move in the slot
+// and not in `unusable`) or a switch target (canSwitch and a non-fainted party Pokemon 0-2 other
+// than the active one), as BattleView.usable_moves / switch_targets. 0: nothing to choose.
+int Gen3Search_HasChoice(uint8_t unusable, int canSwitch);
+
 #ifdef __cplusplus
 }
 #endif
