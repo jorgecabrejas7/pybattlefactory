@@ -13,9 +13,11 @@ Actions by phase:
 """
 
 import enum
-from typing import Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import FrozenSet, Optional, Tuple, Union
 
-from .emu.decode import SB2_FACTORY_RENTS_COUNT, SYMBOLS as S, decode_party, decode_pokemon
+from .emu.decode import (SB2_FACTORY_RENTS_COUNT, SB2_RENTAL_MONS, SYMBOLS as S, decode_party, decode_pokemon,
+                         decode_rental_mons)
 from .pybattle_native import Gen3Game
 from .view import BattleObserver, BattleView, OwnMon, RentalView, RunInfo, SwapView
 
@@ -59,6 +61,22 @@ def rents_offset(open_level: bool) -> int:
     return SB2_FACTORY_RENTS_COUNT + 2 * int(bool(open_level))
 
 
+@dataclass(frozen=True)
+class OpponentKnowledge:
+    """What a player knows about how the next (or current) opponent team was drawn, from the screens seen before it
+    was generated and the Factory's visible rules (battle_factory.c GenerateOpponentMons / FillFactoryBrainParty):
+        challenge   the pool row (the streak's challenge number when it was generated)
+        noland      the Factory Head: his team is drawn when the battle starts, excluding set ids, not species
+        species     normal trainer: the species it cannot have (the 6 rentals shown at the rental screen, or our
+                    team and the defeated team at the swap screen: frontier.rentalMons when it was generated)
+        set_ids     Noland: the sets it cannot have (our team after the swap and the defeated team)
+    The real opponent (gFrontierTempParty, gEnemyParty) is never read to build it."""
+    challenge: int
+    noland: bool = False
+    species: FrozenSet[int] = frozenset()
+    set_ids: FrozenSet[int] = frozenset()
+
+
 class FactoryBackend:
     phase: Phase
 
@@ -97,6 +115,7 @@ class SimBackend(FactoryBackend):
         self._observer = BattleObserver()
         self._observer_done = None
         self.last_battle_won = None
+        self.opponent_knowledge: Optional[OpponentKnowledge] = None
         self._sync()
 
     def clone(self) -> "SimBackend":
@@ -180,10 +199,40 @@ class SimBackend(FactoryBackend):
         return RunInfo(streak, int.from_bytes(battle_num, "little"), streak // 7, self.open_level, info.wins, rents,
                        noland)
 
+    # --- what the player knows about the opponent's generation ------------------------------------------------
+
+    def opponent_knowledge_for(self, action: Action) -> OpponentKnowledge:
+        """At a RENTAL / SWAP decision: what the player knows about the next opponent's generation if `action` is
+        taken (only Noland's depends on the action: our sets after the swap). From the screen and the run's visible
+        state only (frontier.rentalMons holds the rentals / our team and the defeated team at these screens)."""
+        info = self.run_info()
+        if self.phase == Phase.RENTAL:
+            v = self.view()
+            if info.noland:
+                # (a run started at streak 20 / 41: Noland right after the rentals) rentalMons[0..2] become our
+                # picks, [3..5] keep the rentals shown there
+                ids = list(v.frontier_ids)
+                return OpponentKnowledge(info.challenge_num, True,
+                                         set_ids=frozenset([ids[i] for i in action] + ids[3:6]))
+            return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in v.candidates))
+        if self.phase != Phase.SWAP:
+            raise RuntimeError(f"not at a rental / swap decision: {self.phase}")
+        if info.noland:
+            ids = [m.mon_id for m in decode_rental_mons(self.game.read_saveblock2(SB2_RENTAL_MONS, 72))]
+            own, foe = ids[:3], ids[3:6]
+            if action is not None:
+                own[action[0]] = foe[action[1]]
+            return OpponentKnowledge(info.challenge_num, True, set_ids=frozenset(own + foe))
+        own = decode_party(self.game.read(S.addr("gPlayerParty"), 300))[:3]
+        foe = decode_party(self.game.read(S.addr("gEnemyParty"), 300))[:3]    # the defeated team (swap screen)
+        return OpponentKnowledge(info.challenge_num, False, frozenset(m.species for m in own + foe))
+
     # --- actions ------------------------------------------------------------------------
 
     def act(self, action: Action) -> None:
         g = self.game
+        if self.phase in (Phase.RENTAL, Phase.SWAP):
+            self.opponent_knowledge = self.opponent_knowledge_for(action)
         if self.phase == Phase.RENTAL:
             self._observer = self._new_observer()
             if not g.factory_rent(*action):

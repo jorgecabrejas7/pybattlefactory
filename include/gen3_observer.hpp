@@ -156,6 +156,11 @@ struct ObsMemory {
     ObsCacheKey cache;
     ObsView view;                       // the view of the last observed decision
     bool overflow;                      // a rule met a case the fixed-size memory cannot hold (never in practice)
+    // BattleObserver._records / _team_max_hp / _finished: per enemy party slot, what the player saw it do
+    // (FoeRecord: damage, knockouts, turns, hits_taken, max_boosts, inflicted_status)
+    int32_t records[3][6];
+    int32_t team_max_hp;
+    bool finished;
 };
 
 void obs_init(ObsMemory& mem, uint16_t hint_type = 18, uint16_t hint_style = 0);
@@ -163,6 +168,8 @@ void obs_init(ObsMemory& mem, uint16_t hint_type = 18, uint16_t hint_style = 0);
 void obs_observe(ObsMemory& mem, Gen3Game& game, bool forced, uint8_t unusable_mask, bool can_switch);
 // BattleObserver.rebase: the opponent's hidden state of `game` was rewritten (a determinization).
 void obs_rebase(ObsMemory& mem, Gen3Game& game, bool forced);
+// BattleObserver.finish: the battle has just been decided (gBattleOutcome set, before the game winds it down).
+void obs_finish(ObsMemory& mem, Gen3Game& game);
 
 // ---- encodings v3 / v4 (rl/encode.py) ----
 struct EncodeCtx { int streak, battle, challenge, rents; };

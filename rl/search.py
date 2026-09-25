@@ -9,7 +9,11 @@ K determinizations, each a deterministic tree over our decisions in this battle:
              HP inside the HP bar, hidden counters) is sampled from what a player knows, never from the Factory's
              set list or the true state (rl/determinize.py -> Gen3Game.determinize), redrawn if it would change
              what the player can do now (e.g. a trapping ability drawn while the view allows switching), and the
-             observer is rebased on it (BattleObserver.rebase);
+             observer is rebased on it (BattleObserver.rebase). opponent_prior="factory_sets" (training only:
+             refused unless in_training(); rl/alphazero.py's default) draws the opponent's species, moves and
+             items from the Factory's set list instead (rl/determinize.py sample_factory_sets; IVs, EVs and
+             nature still random), with what the player knows of the team's generation
+             (backend.opponent_knowledge);
     perfect  the true state. A ceiling for evaluation only: it needs allow_perfect=True and is refused inside
              training (mark_training(), called by rl/train.py, rl/train_rainbow.py and rl/alphazero.py), by the
              SearchBattler (its
@@ -252,8 +256,10 @@ def to_backend_action(a: int):
 class SearchBattler:
     def __init__(self, policy, n_sims=256, n_determinizations=8, c_puct=1.5, batch=32, mode="legal",
                  allow_perfect=False, seed=0, max_decisions=MAX_DECISIONS, virtual_loss=1.0, native_tree=None,
-                 impl=None, observer="auto", evaluator=None):
-        """impl: "cpp" | "python" | None (cpp when built and the native tree is not refused). observer (cpp impl):
+                 impl=None, observer="auto", evaluator=None, opponent_prior="strict"):
+        """opponent_prior: the legal mode's opponent sampler, "strict" (player knowledge, the default and the only
+        one outside training) or "factory_sets" (the Factory's set list: training-time search only, refused
+        otherwise; rl/determinize.py). impl: "cpp" | "python" | None (cpp when built and the native tree is not refused). observer (cpp impl):
         "cpp" (ObsMemory) | "python" (BattleObserver called from C++) | "auto". evaluator: optional
         f(batch dict of numpy arrays) -> (priors [B, 7], values [B] in [0, 1]) replacing the policy's network
         (tests, an inference server)."""
@@ -264,6 +270,8 @@ class SearchBattler:
                 raise PermissionError("perfect-information search is an evaluation ceiling: pass allow_perfect=True")
             if in_training():
                 raise PermissionError("perfect-information search is never allowed in training")
+        DET.check_prior(opponent_prior)                 # factory_sets: training only (PermissionError otherwise)
+        self._prior = opponent_prior
         if mode == "legal" and not HAS_DETERMINIZE:
             raise RuntimeError("legal-mode search needs Gen3Game.determinize (rebuild the extension)")
         if impl is None:
@@ -301,6 +309,11 @@ class SearchBattler:
         self.redraws = 8
         self.redraw_failed = 0          # roots whose last redraw still changed what the player can do
         self._net_calls, self._eval_ms = 0, 0.0
+
+    @property
+    def opponent_prior(self):
+        """The legal mode's opponent sampler, fixed at construction."""
+        return self._prior
 
     @property
     def mode(self):
@@ -363,7 +376,12 @@ class SearchBattler:
             copy_obs = backend._observer.fast_copy
         if self._mode != "legal" and in_training():
             raise PermissionError("perfect-information search is never allowed in training")
+        if self._prior != "strict":
+            DET.check_prior(self._prior)
         hidden = DET.hidden_counters(view) if self._mode == "legal" else None
+        knowledge = getattr(backend, "opponent_knowledge", None) if self._prior == "factory_sets" else None
+        if self._prior == "factory_sets" and knowledge is None:
+            raise ValueError("factory_sets needs backend.opponent_knowledge (a SimBackend run past a rental)")
         truth = (backend.game.unusable_moves(0), backend.game.can_switch(0))
         for _ in range(self.K):
             obs = copy_obs()
@@ -372,7 +390,7 @@ class SearchBattler:
                 # redraw determinizations that would change it (e.g. a Shadow Tag / Arena Trap ability drawn)
                 for attempt in range(self.redraws):
                     g = backend.game.clone()
-                    specs = DET.sample_determinization(view, None, self.rng, open_level=backend.open_level)
+                    specs = DET.determinization(view, knowledge, self.rng, backend.open_level, self._prior)
                     g.determinize(specs, hidden, self.rng.getrandbits(32))
                     if forced or (g.unusable_moves(0), g.can_switch(0)) == truth:
                         break

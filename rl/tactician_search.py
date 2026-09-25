@@ -9,7 +9,11 @@ Every option (a legal (lead, pair) rental, or keep / one of the legal trades) is
        fills gEnemyParty with the real next opponent, generated before the decision);
     2. before the battle's first frame, replace the whole opposing team with one sampled from player knowledge only
        (rl/determinize.py sample_determinization with the 3 slots unseen: species uniform over the Frontier
-       species, learnable moves, battle items, random IVs / EVs / nature / ability, full HP). The real team is
+       species, learnable moves, battle items, random IVs / EVs / nature / ability, full HP), or, with
+       opponent_prior="factory_sets" (training only; rl/alphazero.py's default), from the Factory's set list the way
+       the game draws the team (rl/determinize.py sample_factory_sets: the round's pool, the species on screen when
+       it was generated excluded, SimBackend.opponent_knowledge_for; species / moves / item from the set, IVs / EVs /
+       nature still random). The real team is
        overwritten first by a copy of our own party (the template Gen3Game.determinize rebuilds from: level, OT id,
        and "no item" kept only if our Pokemon has none), and the RNG is reseeded from the search's own stream, so
        nothing of the real next opponent (RAM, hint, RNG position) reaches the simulation;
@@ -19,7 +23,9 @@ Every option (a legal (lead, pair) rental, or keep / one of the legal trades) is
        max_decisions (value: the battler network's estimate of winning);
     4. value of a simulation, in the tactician's return units (battles won from the decision until the run ends,
        gamma 1): 0 if lost; if won, 1 + V_t(next tactician decision) with the tactician's value network
-       (bootstrap=True; the next swap screen shows the defeated team's species only) or just 1 (bootstrap=False).
+       (bootstrap=True; the next swap screen shows the defeated team as the player saw it in the simulated battle:
+       reveals and v4 defeated-foe records, from the simulation's observer, finished when the battle is decided as
+       SimBackend does) or just 1 (bootstrap=False).
 
 Budget allocation: Gumbel top-m + sequential halving (Danihelka et al., 2022). The m options (max_considered,
 default 16) with the highest log pi + Gumbel noise (noise=True; log pi only otherwise) are simulated, budget/R battles
@@ -56,6 +62,7 @@ NO_HINT = (18, 0)                       # the simulated opponent is not the one 
 _PLAYER_PARTY = S.addr("gPlayerParty")
 _D = Gen3Game.Decision
 _P = Gen3Game.FactoryPhase
+_RUN_FRAMES = 400000                    # SimBackend._sync's frame budget per decision
 
 
 # ---- options ----------------------------------------------------------------------------------------------------
@@ -82,19 +89,28 @@ def option_logp(kind, logits, options):
     return np.array([lp[a] for a in options])
 
 
+def _unseen_view(level):
+    return SimpleNamespace(enemy_party=[SeenMon() for _ in range(3)], own_party=[SimpleNamespace(level=level)])
+
+
 def unseen_team_specs(level, rng, open_level=True):
     """Gen3Game.determinize specs for a whole opposing team nobody has seen yet, from player knowledge only (the
     legal sampler of rl/determinize.py with every slot unseen)."""
-    view = SimpleNamespace(enemy_party=[SeenMon() for _ in range(3)], own_party=[SimpleNamespace(level=level)])
-    return DET.sample_determinization(view, None, rng, open_level=open_level)
+    return DET.sample_determinization(_unseen_view(level), None, rng, open_level=open_level)
 
 
-def start_simulated_battle(backend, kind, option, rng):
+def start_simulated_battle(backend, kind, option, rng, prior="strict", knowledge=None):
     """A clone of `backend` (at a RENTAL / SWAP decision) with `option` applied and a battle about to start against
-    an opponent sampled from player knowledge. -> the cloned SimBackend (its game at the battle's start)."""
+    an opponent sampled with the sampler `prior` ("strict": player knowledge; "factory_sets": the Factory's set list,
+    training only, with `knowledge` = backend.opponent_knowledge_for(action), computed here if None).
+    -> the cloned SimBackend (its game at the battle's start; its opponent_knowledge is the simulated opponent's)."""
+    act = decode_action(kind, option)
+    if prior != "strict":
+        DET.check_prior(prior)
+        if knowledge is None:
+            knowledge = backend.opponent_knowledge_for(act)
     be = backend.clone()
     g = be.game
-    act = decode_action(kind, option)
     if kind == "rental":
         ok = g.factory_rent(*act)
     else:
@@ -105,7 +121,12 @@ def start_simulated_battle(backend, kind, option, rng):
     own = g.read(_PLAYER_PARTY, 300)
     g.write_party(1, own)
     level = decode_party(own)[0].level
-    if not g.determinize(unseen_team_specs(level, rng, backend.open_level)):
+    if prior == "strict":
+        specs = unseen_team_specs(level, rng, backend.open_level)
+    else:
+        specs = DET.determinization(_unseen_view(level), knowledge, rng, backend.open_level, prior)
+    be.opponent_knowledge = knowledge
+    if not g.determinize(specs):
         raise RuntimeError("the simulated opponent team was not fully rebuilt")
     g.set_rng(rng.getrandbits(32))
     be.phase = Phase.BATTLE
@@ -163,16 +184,27 @@ class BattleSimulator:
             if not choice and s.ndec < self.max_decisions:
                 g.choose_move(0)                                    # nothing to choose (FactoryEnv plays move 0)
                 s.ndec += 1
-                s.d = g.factory_run_battle()
+                self._run(s)
                 continue
             if s.ndec >= self.max_decisions:
                 s.trunc = True                                      # cut: valued by the network below
             return s.obs.encode(g, s.ctx) if self.cpp else encode.battle(s.view, s.ctx)
 
+    @staticmethod
+    def _run(s):
+        """Run the battle of `s` to its next decision, or to its end: then, as SimBackend does, the observer
+        accounts for the last turn (finish) at the moment the battle is decided, before the game winds it down and
+        runs on to the next Factory phase."""
+        d = s.g.run(_RUN_FRAMES)
+        if d == _D.BATTLE_OVER:
+            s.obs.finish(s.g)
+            d = s.g.factory_run_battle()
+        s.d = d
+
     def run(self, sims):
         """Play every _Sim to the end of its battle (the game then runs on to the next Factory phase)."""
         for s in sims:
-            s.d = s.g.factory_run_battle()
+            self._run(s)
         active = list(sims)
         while active:
             batch, who = [], []
@@ -201,18 +233,33 @@ class BattleSimulator:
                     self.errors += 1
                     continue
                 s.ndec += 1
-                s.d = s.g.factory_run_battle()
+                self._run(s)
             active = [s for s in who if not s.done]
 
 
-def next_tactician_obs(be):
-    """After a won simulated battle: the next tactician decision's (kind, observation). The swap screen's defeated
-    team is shown with its species only and without the v4 defeated-foe records (zeros): the simulated battle is
-    observed by the C++ observer, which does not keep reveals or records."""
+def observer_memory(obs):
+    """A BattleObserver holding what the simulated battle's observer (C++ ObsMemory or Python BattleObserver)
+    remembers for the swap screen: the reveals (moves, items, abilities) and the per-opponent records."""
+    if isinstance(obs, BattleObserver):
+        return obs
+    o = BattleObserver()
+    o.revealed_moves = {int(i): list(v) for i, v in obs.revealed_moves.items()}
+    o.revealed_items = {int(i): int(v) for i, v in obs.revealed_items.items()}
+    o.revealed_abilities = {int(i): int(v) for i, v in obs.revealed_abilities.items()}
+    o._records = [list(r) for r in obs.records]
+    o._team_max_hp = obs.team_max_hp
+    o._finished = obs.finished
+    return o
+
+
+def next_tactician_obs(be, obs=None):
+    """After a won simulated battle: the next tactician decision's (kind, observation). The swap screen shows the
+    defeated team as the player saw it in the simulated battle (`obs`, its observer: species, revealed moves / items
+    / abilities, and the v4 defeated-foe records), exactly as SimBackend's swap view after a real battle."""
     fp = be.game.factory_phase
     if fp == _P.SWAP:
         be.phase = Phase.SWAP
-        be._observer = BattleObserver()
+        be._observer = observer_memory(obs) if obs is not None else BattleObserver()
         view = be.view()
         return "swap", encode.swap(view, run_ctx(be))
     if fp == _P.RENTAL:
@@ -229,7 +276,11 @@ class TacticianSearch:
     (bootstrap off)."""
 
     def __init__(self, battler_evaluator, tactician_values=None, budget=256, max_considered=16, max_decisions=300,
-                 bootstrap=True, target="visits", temperature=0.5, seed=0, cpp_obs=None):
+                 bootstrap=True, target="visits", temperature=0.5, seed=0, cpp_obs=None, opponent_prior="strict"):
+        """opponent_prior: the simulated opponents' sampler, "strict" (player knowledge) or "factory_sets" (the
+        Factory's set list: training only, refused otherwise)."""
+        DET.check_prior(opponent_prior)
+        self.prior = opponent_prior
         if target not in ("visits", "softmax"):
             raise ValueError(f"target must be 'visits' or 'softmax', not {target!r}")
         if bootstrap and tactician_values is None:
@@ -263,9 +314,15 @@ class TacticianSearch:
             alive = list(np.argsort(-score0, kind="stable")[:m])
             rounds = max(1, math.ceil(math.log2(m)))
             per_round = max(1, self.budget // rounds)
+            know = {}
+            if self.prior != "strict":
+                DET.check_prior(self.prior)
+                for i in alive:
+                    know[i] = backend.opponent_knowledge_for(decode_action(kind, options[i]))
             for _ in range(rounds):
                 k = max(1, per_round // len(alive))
-                sims = [_Sim(start_simulated_battle(backend, kind, options[i], self.rng), i, self.sim.cpp)
+                sims = [_Sim(start_simulated_battle(backend, kind, options[i], self.rng, self.prior, know.get(i)), i,
+                             self.sim.cpp)
                         for i in alive for _ in range(k)]
                 self.sim.run(sims)
                 vals = self._values(sims)
@@ -294,7 +351,7 @@ class TacticianSearch:
         vals = np.array([s.value for s in sims], np.float64)
         if not self.bootstrap:
             return vals
-        nxt = [(j, *next_tactician_obs(s.be)) for j, s in enumerate(sims) if s.won and not s.trunc]
+        nxt = [(j, *next_tactician_obs(s.be, s.obs)) for j, s in enumerate(sims) if s.won and not s.trunc]
         nxt = [x for x in nxt if x[1] is not None]
         if nxt:
             v = self.values([k for _, k, _ in nxt], [o for _, _, o in nxt])

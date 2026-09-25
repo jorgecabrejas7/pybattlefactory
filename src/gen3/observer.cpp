@@ -1128,6 +1128,8 @@ struct Observer {
         update_seen(s);
         update_reveals(a, s, ev, can_switch);
         update_counters(a, s, ev);
+        if (new_turn_done) record_turns(*a, s, ev);
+        record_boosts(s);
         build(s, ev, forced, unusable, can_switch, m.view);
 
         if (!forced) {
@@ -1137,6 +1139,56 @@ struct Observer {
         m.prev = s;
         m.has_prev = true;
         m.cache = key;
+    }
+
+    // BattleObserver.finish
+    void finish(Gen3Game& game) {
+        if (m.finished || !m.has_start) return;
+        m.finished = true;
+        ObsSnap s;
+        read_snap(game, false, s, nullptr);
+        const ObsSnap& a = m.start;
+        ObsEvents ev = turn_events(a, s, std::max(1, s.turn - a.turn));
+        record_turns(a, s, ev);
+        record_boosts(s);
+    }
+
+    // --- per-opponent records (BattleObserver._record_turns / _record_boosts) ---
+    static void own_state(const ObsSnap& s, int i, int& hp, int& st) {
+        if (i == s.idx[0]) {
+            hp = s.mons[0].hp;
+            st = major_status(s.mons[0].status1);
+        } else {
+            hp = s.parties[0][i].hp;
+            st = major_status(s.parties[0][i].status);
+        }
+    }
+
+    void record_turns(const ObsSnap& a, const ObsSnap& s, const ObsEvents& ev) {
+        int j = ev.enemy_action == ACTION_SWITCH ? s.idx[1] : a.idx[1];
+        if ((unsigned)j >= 3u) return;
+        int32_t* rec = m.records[j];
+        m.team_max_hp = 0;
+        for (int i = 0; i < 3; i++) m.team_max_hp += s.parties[0][i].max_hp;
+        bool rested = ev.own_action == ACTION_MOVE && is(ev.own_move, {E::REST});
+        for (int i = 0; i < 3; i++) {
+            int hp0, st0, hp1, st1;
+            own_state(a, i, hp0, st0);
+            own_state(s, i, hp1, st1);
+            rec[0] += std::max(0, hp0 - hp1);
+            if (hp0 > 0 && hp1 == 0) rec[1] += 1;
+            if (st0 == 0 && st1 != 0 && hp1 > 0 && !(rested && i == a.idx[0] && st1 == 1)) rec[5] = 1;
+        }
+        rec[2] += ev.turns;
+        if (ev.own_action == ACTION_MOVE && ev.damage_dealt_pixels > 0) rec[3] += 1;
+    }
+
+    void record_boosts(const ObsSnap& s) {
+        int j = s.idx[1];
+        if ((unsigned)j >= 3u) return;
+        int boosts = 0;
+        for (int k = 1; k < 8; k++) boosts += std::max(0, s.mons[1].stat_stages[k] - 6);
+        if (boosts > m.records[j][4]) m.records[j][4] = boosts;
     }
 
     void rebase(Gen3Game& game, bool forced) {
@@ -1728,6 +1780,8 @@ void obs_observe(ObsMemory& mem, Gen3Game& game, bool forced, uint8_t unusable_m
 }
 
 void obs_rebase(ObsMemory& mem, Gen3Game& game, bool forced) { Observer{mem}.rebase(game, forced); }
+
+void obs_finish(ObsMemory& mem, Gen3Game& game) { Observer{mem}.finish(game); }
 
 void set_encode_version(int version) {
     if (version != 3 && version != 4)

@@ -297,6 +297,15 @@ ObsMemory from_python(const py::object& ob) {
             }
     }
     m.turns_done = geti(ob, "_turns_done");
+    if (py::hasattr(ob, "_records")) {
+        py::sequence recs = ob.attr("_records");
+        for (int j = 0; j < 3 && j < (int)py::len(recs); j++) {
+            py::sequence r = recs[j];
+            for (int k = 0; k < 6; k++) m.records[j][k] = r[k].cast<int>();
+        }
+        m.team_max_hp = geti(ob, "_team_max_hp");
+        m.finished = getb(ob, "_finished");
+    }
     py::object start = ob.attr("_start"), prev = ob.attr("_prev");
     if (!start.is_none()) {
         conv_snap(start, m.start);
@@ -365,6 +374,37 @@ void bind_observer(py::module_& m) {
              }, py::arg("game"), py::arg("forced"), py::arg("unusable_mask"), py::arg("can_switch") = true)
         .def("rebase", [](ObsMemory& mem, Gen3Game& g, bool forced) { obs_rebase(mem, g, forced); },
              py::arg("game"), py::arg("forced"))
+        .def("finish", [](ObsMemory& mem, Gen3Game& g) { obs_finish(mem, g); }, py::arg("game"),
+             "BattleObserver.finish: the battle has just been decided (before the game winds it down)")
+        .def_property_readonly("records", [](const ObsMemory& mem) {
+            // BattleObserver._records: per enemy party slot [damage, knockouts, turns, hits_taken, max_boosts,
+            // inflicted_status]
+            std::vector<std::vector<int>> out(3);
+            for (int j = 0; j < 3; j++) out[j].assign(mem.records[j], mem.records[j] + 6);
+            return out;
+        })
+        .def_property_readonly("team_max_hp", [](const ObsMemory& mem) { return mem.team_max_hp; })
+        .def_property_readonly("finished", [](const ObsMemory& mem) { return mem.finished; })
+        .def_property_readonly("revealed_moves", [](const ObsMemory& mem) {
+            // BattleObserver.revealed_moves (slots with at least one revealed move)
+            py::dict d;
+            for (int i = 0; i < 3; i++)
+                if (mem.n_revealed[i])
+                    d[py::int_(i)] = std::vector<int>(mem.revealed_moves[i], mem.revealed_moves[i] + mem.n_revealed[i]);
+            return d;
+        })
+        .def_property_readonly("revealed_items", [](const ObsMemory& mem) {
+            py::dict d;
+            for (int i = 0; i < 3; i++)
+                if (mem.revealed_items[i] >= 0) d[py::int_(i)] = mem.revealed_items[i];
+            return d;
+        })
+        .def_property_readonly("revealed_abilities", [](const ObsMemory& mem) {
+            py::dict d;
+            for (int i = 0; i < 3; i++)
+                if (mem.revealed_abilities[i]) d[py::int_(i)] = mem.revealed_abilities[i];
+            return d;
+        })
         .def("copy", [](const ObsMemory& mem) { return ObsMemory(mem); })
         .def("__copy__", [](const ObsMemory& mem) { return ObsMemory(mem); })
         .def("encode", [](const ObsMemory& mem, Gen3Game& g, const py::dict& ctx) {
