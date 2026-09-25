@@ -142,7 +142,7 @@ Resize it, maximize it or click **Fullscreen**: everything follows the window si
 its text shrinks a little instead of being cut off.
 
 - **Header** (top): the phase (RENTAL, BATTLE, FORCED SWITCH, SWAP), the round (a block of 7
-  battles), the battle number *n*/7 (with a **NOLAND** badge on battles 21 and 42), the win
+  battles), the battle number *n*/7 (with a **NOLAND** badge when the battle is against him), the win
   streak, the wins in this run, the Factory's rental counter, the run number, and on the right the
   mode (AGENTS / STEP / HUMAN) and the speed.
 - **Game screen** (left) with the **decision log** below it: every decision and battle result, also
@@ -272,7 +272,9 @@ python scripts/watch.py --rom ... --save ... --agents mymodule:MyTactician,mymod
 **Useful extras**
 
 - `game.run_info()`: the win streak, the battle number inside the challenge (0–6), the challenge
-  number, and wins so far.
+  number, wins so far, the rental counter and `noland` (the current / next battle is against him).
+  `reset(win_streak=...)` also gives the run the Factory symbols a player with that streak holds (silver from 21,
+  gold from 42), so Noland comes when he would: battle 21, 42, then every 21.
 - `game.last_battle_won`: whether the most recent battle was won.
 - `SimBackend.clone()`: an independent copy of the whole game at this moment. Useful for trying
   "what if I did X" without touching the real run.
@@ -394,7 +396,8 @@ completed turns since it started (1 at the first decision after the turn it bega
 - `own_fainted`, `enemy_fainted`.
 
 *Opponent hints*: `hint_type`, `hint_style`: what the attendant said about this opponent before
-the battle.
+the battle. Before Noland's battles the game generates no opponent and says nothing about him: both backends
+report `(18, 0)` (no type, no style).
 
 *Weather and turn number*: see the table; `turn` is the game's turn counter (starts at 0, stops
 at 255).
@@ -515,7 +518,11 @@ cmake --build build -j && python -m pytest tests/python
 - Singles only, as planned. Doubles is not wired up.
 - Human mode was tested with simulated key presses; the mgba-qt Lua bridge has not been tested yet.
 - The old hand-written engine (`src/battle_engine.cpp`, `pybattle/pkmn_env.py`,
-  `pybattle/factory_hrl_env.py`) is still in the repo but superseded. Nothing uses it.
+  `pybattle/factory_hrl_env.py`) is still in the repo but superseded. Only `tests/python/test_smoke.py` (the
+  expected failure) still uses it.
+- The game's C code is compiled with `-ftrivial-auto-var-init=zero`: a few game functions copy uninitialized
+  stack memory into battle state, which made two copies of the same game diverge depending on what the process
+  had run before. Zero-initialized, every copy plays the same; the recorded real battles still replay exactly.
 
 ---
 

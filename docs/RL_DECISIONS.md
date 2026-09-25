@@ -180,13 +180,16 @@ Detalles fijados al implementar:
 - **Contador de alquileres**: se lee de `SaveBlock2 + 0xDF4`. El comentario de `global.h` dice 0xDF6: está desplazado 2 bytes.
   Suma 1 por el alquiler de cada reto y 1 por cada intercambio, y se actualiza en la victoria siguiente.
 - **Máscara de intercambio**: replica `Swap_AlreadyHasSameSpecies` (`host_factory_screen.c`).
-- **Rachas**: todas empiezan en 0 (`win_streak=0`). Empezar más adelante está pendiente de decidir.
+- **Rachas**: v1 empezaba siempre en 0 (`win_streak=0`); desde v2 hay inicios en rondas altas (§13).
 - **Comprobado**:
   - el retorno del táctico = racha;
   - la suma del shaping de un combate = victoria − β·Φ(s₀) con γ = 1.
   - memoria: 0,85 M parámetros; pico de GPU de 281 MiB en la actualización del combatiente; 40 MiB de RAM por buffer.
 
 ## 11. Cómo lanzarlo y verlo
+
+Las opciones por defecto de `rl.train` son las de v3 (§14). Para reproducir v1:
+`--gamma-b 0.99 --start-p0 1 --share all --value-norm 0 --beta-anneal-steps 0 --encode-version 2`.
 
 ```bash
 tmux new -s factory
@@ -210,8 +213,10 @@ Qué mirar en TensorBoard:
 
 ## 12. Rainbow DQN (implementado en `rl/rainbow.py` y `rl/train_rainbow.py`; se lanzará cuando termine PPO)
 
-Se entrena igual que PPO para que la comparación aísle el algoritmo: los dos agentes a la vez, con la misma red base,
-las mismas observaciones, el mismo Φ y el mismo truncamiento.
+Se entrena igual que PPO v3 (§14) para que la comparación aísle el algoritmo: los dos agentes a la vez, con la misma
+red base (el táctico con su propio tronco, `--share embeddings`), las mismas observaciones, el mismo Φ retirado
+gradualmente (`--beta-anneal-steps`), γ del combatiente = 1, los mismos inicios de racha (`--start-p0 0.5`) y el
+mismo truncamiento. (Hasta 2026-09-25 se entrenaba como v1: γ 0,99, β fijo, inicios en 0 y tronco compartido.)
 
 - **Las seis piezas**: Double DQN, replay priorizado (α = 0,5; β de 0,4 a 1 a lo largo de 50 M decisiones), red dueling
   (media de A solo sobre las acciones legales), retornos a n pasos (5 para el combatiente, 3 para el táctico),
@@ -231,6 +236,8 @@ las mismas observaciones, el mismo Φ y el mismo truncamiento.
   - la del táctico se descarta, porque no hay observación suya en ese momento (le ocurre a ~0,1 % de los combates).
 - **Resto de parámetros**: tasa de aprendizaje 1·10⁻⁴ (Adam, ε = 1,5·10⁻⁴), red objetivo copiada cada 8.000 pasos de gradiente,
   calentamiento de 20 k transiciones (combatiente) y 2 k (táctico).
+- **Ruido de la red objetivo**: se sortea de nuevo en cada paso de aprendizaje (`target.reset_noise()`), como el de la
+  red online al actuar. Antes se quedaba la muestra copiada en la última sincronización durante 8.000 pasos.
 - **Comprobado**:
   - los retornos a n pasos coinciden con el cálculo a mano;
   - la proyección de C51 tiene los índices acotados (en GPU, el error de coma flotante los sacaba del soporte);
@@ -349,15 +356,29 @@ Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
   - Las hojas terminales valen 1 o 0; en 300 decisiones se trunca y se usa el valor de la red.
   - Decisión = argmax de las visitas sumadas en la raíz.
 - **Modos:**
-  - **legal** (el que cuenta): la información oculta se sortea con lo que sabe un jugador (`rl/determinize.py`):
-    - sets compatibles con lo revelado;
-    - Pokémon no vistos sacados del grupo de la ronda, con las mismas exclusiones que `GenerateOpponentMons`;
-    - habilidad 50/50;
-    - IVs de 3/6 y la regla de Noland;
-    - PS exactos dentro de la barra;
-    - contadores de sueño y confusión sorteados de nuevo.
-  - **perfect**: el estado real. **Solo es un techo de referencia; está prohibido en el entrenamiento**
-    (`mark_training()` en `rl/train*.py` más una comprobación en `SearchBattler`).
+  - **legal** (el que cuenta): la información oculta se sortea **solo con lo que sabe un jugador real**
+    (`rl/determinize.py`; criterio estricto decidido por el usuario el 2026-09-25: ninguna decisión puede tener en
+    cuenta IVs, EVs ni nada que un jugador no sepa). No se usan la lista de sets de la Factory, el grupo de la ronda,
+    los IVs fijos del juego ni el estado real:
+    - especie vista: la suya; no vista: cualquiera de la lista de especies de la Frontera (sin repetir en el equipo);
+    - movimientos: los revelados, y el resto al azar entre los que la especie puede aprender a su nivel (nivel,
+      MT/MO, tutor, huevo y preevoluciones: `pybattle/data/learnsets.json`, `scripts/extract_learnsets.py`);
+    - objeto: el revelado, o uno al azar entre los que tienen efecto en combate (los específicos solo para su
+      especie), sin repetir en el equipo; uno consumido o quitado sigue sin estar;
+    - IVs 0–31 por stat, EVs aleatorios hasta 510 (≤ 252 por stat) y naturaleza al azar;
+    - habilidad: la anunciada, o 50/50 (un Pokémon visto que no anunció Intimidación no la tiene);
+    - PS exactos dentro de la barra, con los PS máximos del sorteo;
+    - contadores ocultos sorteados con lo que el jugador contó: sueño y confusión (los dos bandos), Atadura,
+      Alboroto, Enfado, Anulación y Otra Vez (turnos restantes compatibles con los transcurridos), PS del Sustituto
+      rival, daño pendiente de Premonición / Deseo Oculto (recalculado con los Pokémon actuales) y el bloqueo de
+      Cinta Elegida del rival (según el objeto sorteado).
+  - **perfect**: el estado real. **Solo es un techo de referencia; está prohibido en el entrenamiento**:
+    `mark_training()` en `rl/train*.py`, `SearchBattler.mode` de solo lectura y comprobado al preparar raíces, y el
+    `Searcher` C++ rechaza raíces que no sean determinizaciones completas cuando `PYB_TRAINING` está activo.
+  - **En los dos modos**, cada raíz vuelve a sortear el azar del turno (`Gen3Game.redraw_turn`): semilla del RNG,
+    la tirada de Garra Rápida del turno (`gRandomTurnNumber`) y **la elección del rival para este turno**, que su IA
+    ya ha hecho mientras el jugador decide: se deshace y la IA vuelve a elegir desde el estado de la raíz. En un
+    cambio forzado con los dos debilitados, se vuelve a elegir también su sustituto.
 - **Implementación:**
   - C++ (`src/gen3/`):
     - `sim_step`, `determinize`, `set_rng`;
@@ -395,17 +416,28 @@ Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
   - el movimiento coincide el 96 % de las veces.
 
   Por eso legal ≈ perfect. Hay que repetir la tabla tras corregirlo. El entrenamiento PPO no se ve afectado,
-  porque no usa búsqueda.
+  porque no usa búsqueda. **Corregido** el 2026-09-25 (`redraw_turn`, ver Modos); además la determinización legal ya
+  no usa la lista de sets de la Factory, así que la tabla nueva no es comparable con esta.
 
   Lectura original (pendiente de confirmar):
   - la búsqueda mejora todas las rondas con 256 simulaciones (+2 a +7 puntos) y más aún con 1.024 (hasta +11);
   - con 64 simulaciones apenas aporta;
   - conocer la información oculta no mejora sobre el modo legal: el límite está en la profundidad de la búsqueda y en
     la calidad de la red, no en la información oculta.
-- **Limitaciones conocidas:**
-  - no se vuelven a sortear algunos contadores ocultos (Atadura, Enfado, Alboroto, temporizadores de Anulación y Otra Vez);
-  - los candidatos de Noland son un superconjunto ligero de los reales;
-  - fallos de reproducibilidad de `FactoryEnv.reset()`: la evaluación usa un entorno nuevo por racha.
+- **Limitaciones conocidas** (lo que queda sin sortear o simplificado; también en `src/gen3/search_host.c`):
+  - no se usa la evidencia negativa (p. ej., no ver Restos tras recibir daño no descarta Restos);
+  - el sueño de Descanso (3 turnos fijos) no se distingue del aleatorio;
+  - el daño acumulado de Venganza (`gBideDmg`) del rival y los registros de daño del turno de Contraataque / Manto
+    Espejo no se sortean;
+  - la amistad es 0 (como la construye la Frontera; solo afecta a Retribución / Frustración);
+  - 26 de los 3.528 movimientos de los sets de la Factory solo se obtienen por intercambio con otros juegos y no
+    están en los learnsets (Smeargle puede tener cualquiera);
+  - el recuento de turnos transcurridos del observador coincide con el contador real en el 99,7 % de los casos
+    medidos; en el resto el sorteo se queda con el valor más bajo posible.
+- **Reproducibilidad**: el simulador es determinista (los locales C se inicializan a cero,
+  `-ftrivial-auto-var-init=zero`; antes dos clones del mismo estado podían divergir en ~18 % de los pasos según lo que
+  el proceso hubiera ejecutado antes). `FactoryEnv.reset()` no arrastra estado del juego; lo que hacía irreproducible
+  la evaluación por ronda era el consumo doble de semillas tras una derrota, ya corregido en `eval_round`.
 
 Pendiente (se suman a la lista de abajo):
 - **Codificación v4** (decisiones del usuario, 2026-09-25):
@@ -416,6 +448,11 @@ Pendiente (se suman a la lista de abajo):
     (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden de los ids, así que hoy se aplican al revés);
   - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
 - **Entrenar con búsqueda** (expert iteration, solo en modo legal).
+- **KL del táctico** (revisión 2026-09-25): sus lotes mezclan transiciones de políticas anteriores (quedan pendientes
+  hasta su siguiente decisión, y las actualizaciones del combatiente mueven los embeddings compartidos), de ahí los
+  picos de approx_kl. No es un fallo de cálculo. `ppo_update` registra ahora `stale_kl` / `stale_clip_frac` (antes de
+  ningún paso) y `rl.train` acepta `--target-kl-t` (parada temprana) y `--refresh-logp-t 1` (recalcular los log-prob
+  viejos al empezar la actualización). Por defecto nada cambia: **decidir** si se activan.
 
 ---
 
