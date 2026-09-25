@@ -7,13 +7,15 @@ Each iteration:
   1. Self-play with a frozen snapshot of the network: --workers processes play Factory runs; the battler network
      runs in one GPU inference server shared by all of them (rl/inference.py: search leaves and the simulated
      battles' plain evaluations), the tactician network on each worker's CPU copy.
-       battler     the C++ ensemble MCTS in legal mode only (rl/search.py; K determinizations from player
-                   knowledge, every root's turn redrawn), with Dirichlet noise on the root priors; the action is
+       battler     the C++ ensemble MCTS in legal mode only (rl/search.py; K determinizations, every root's turn
+                   redrawn; the opponent drawn with --opponent-prior: factory_sets = the Factory's set list, the
+                   training-only sampler, IVs / EVs / nature random; strict = player knowledge, the evaluation /
+                   inference sampler), with Dirichlet noise on the root priors; the action is
                    sampled from the root visits with temperature --temperature. Targets: policy = root visit
                    distribution; value = (1 - m) z + m q, z = the battle's outcome (1 / 0), q = the search's root value
                    (visit-weighted mean Q), m = --value-mix-b.
        tactician   search by simulation (rl/tactician_search.py): every rental / swap option is valued by battles
-                   against opponents sampled from player knowledge, played by the frozen battler network (greedy, no
+                   against opponents drawn with --opponent-prior, played by the frozen battler network (greedy, no
                    search), with Gumbel top-m + sequential halving. Targets: policy = the search policy (visit
                    distribution, or softmax of the option values); value = (1 - m) z + m q, z = battles won from the
                    decision until the run ends (gamma 1), q = the chosen option's value, m = --value-mix-t.
@@ -83,6 +85,9 @@ def parse(argv=None):
     p.add_argument("--dirichlet-frac", type=float, default=0.25)
     p.add_argument("--temperature", type=float, default=1.0, help="self-play action ~ visits^(1/T); 0: argmax")
     p.add_argument("--max-decisions", type=int, default=300, help="battler decisions per battle before truncation")
+    p.add_argument("--opponent-prior", choices=("factory_sets", "strict"), default="factory_sets",
+                   help="opponent sampler of both searches: the Factory's set list (training only; IVs / EVs / "
+                        "nature random) or strict player knowledge (the evaluation / inference sampler)")
     # tactician search
     p.add_argument("--t-budget", type=int, default=256, help="simulated battles per tactician decision")
     p.add_argument("--t-considered", type=int, default=16, help="options kept by Gumbel top-m")
@@ -141,11 +146,12 @@ class AZBattler(SearchBattler):
     search_root returns the whole root statistics; the caller picks the action."""
 
     def __init__(self, evaluator, n_sims=128, n_determinizations=8, c_puct=1.5, batch=32, seed=0,
-                 dirichlet_alpha=0.3, dirichlet_frac=0.25, observer="auto"):
+                 dirichlet_alpha=0.3, dirichlet_frac=0.25, observer="auto", opponent_prior="strict"):
         if observer == "auto" and encode.VERSION not in (3, 4):
             observer = "python"                       # the C++ observer encodes versions 3 and 4
         super().__init__(None, n_sims=n_sims, n_determinizations=n_determinizations, c_puct=c_puct, batch=batch,
-                         mode="legal", seed=seed, impl="cpp", observer=observer, evaluator=evaluator)
+                         mode="legal", seed=seed, impl="cpp", observer=observer, evaluator=evaluator,
+                         opponent_prior=opponent_prior)
         self.alpha, self.frac = dirichlet_alpha, dirichlet_frac
         self.np_rng = np.random.default_rng(seed)
 
@@ -258,11 +264,12 @@ class SelfPlayer:
         self._local_eval = local_battler_evaluator(self.net, None)
         self.battler = AZBattler(self.evaluator, cfg["sims"], cfg["dets"], cfg["c_puct"], cfg["search_batch"],
                                  seed=seed, dirichlet_alpha=cfg["dirichlet_alpha"],
-                                 dirichlet_frac=cfg["dirichlet_frac"])
+                                 dirichlet_frac=cfg["dirichlet_frac"], opponent_prior=cfg["opponent_prior"])
         self.tsearch = TacticianSearch(self._sim_eval, self.t_values, budget=cfg["t_budget"],
                                        max_considered=cfg["t_considered"], max_decisions=cfg["t_max_decisions"],
                                        bootstrap=bool(cfg["t_bootstrap"]), target=cfg["t_target"],
-                                       temperature=cfg["t_target_temp"], seed=seed + 1)
+                                       temperature=cfg["t_target_temp"], seed=seed + 1,
+                                       opponent_prior=cfg["opponent_prior"])
         self.rng = random.Random(seed ^ 0xA2)
         self.np_rng = np.random.default_rng(seed + 2)
         self.env = CurriculumEnv(seed, max_decisions=cfg["max_decisions"])
@@ -712,7 +719,8 @@ def save_atomic(obj, path):
 def worker_cfg(args):
     keys = ("encode_version", "d_emb", "d", "layers", "heads", "sims", "dets", "c_puct", "search_batch",
             "dirichlet_alpha", "dirichlet_frac", "temperature", "max_decisions", "t_budget", "t_considered",
-            "t_bootstrap", "t_target", "t_target_temp", "t_max_decisions", "t_local_batch", "holdout")
+            "t_bootstrap", "t_target", "t_target_temp", "t_max_decisions", "t_local_batch", "holdout",
+            "opponent_prior")
     return {k: getattr(args, k) for k in keys}
 
 
@@ -931,7 +939,8 @@ def evaluate_rounds(net, device, args, tb, step, server, snap_path):
     if args.eval_search_sims > 0 and server is not None:
         from .eval_rounds import eval_round_inprocess
         kw = {"n_sims": args.eval_search_sims, "n_determinizations": args.dets, "c_puct": args.c_puct,
-              "batch": args.search_batch, "mode": "legal", "seed": 0}
+              "batch": args.search_batch, "mode": "legal", "seed": 0,
+              "opponent_prior": "strict"}   # evaluation: the strict sampler, never the training one
         for k in _rounds(args.eval_rounds):
             r = eval_round_inprocess(snap_path, k, args.eval_search_runs, "search", kw,
                                      procs=args.eval_search_procs, server=server, slot0=args.workers)

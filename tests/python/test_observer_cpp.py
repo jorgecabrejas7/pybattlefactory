@@ -129,9 +129,14 @@ def test_real_runs_and_from_python(version):
         mem.observe(g, forced, unusable, can_switch)
         mem.observe(g, forced, unusable, can_switch)          # the same decision again: cached, no change
         st.check("run", v, ctx, mem, g)
+        # the memory the simulated swap screens read (records, reveals: rl/tactician_search.py)
+        assert mem.records == o._records and mem.team_max_hp == o._team_max_hp
+        assert mem.revealed_moves == {i: m for i, m in o.revealed_moves.items() if m}
+        assert mem.revealed_items == o.revealed_items and mem.revealed_abilities == o.revealed_abilities
         for c in chains:
             c.observe(g, forced, unusable, can_switch)
             st.check("from_python chain", v, ctx, c, g)
+            assert c.records == o._records
         if rng.random() < 0.08:
             c = N.ObsMemory.from_python(o)
             st.check("from_python", v, ctx, c, g)

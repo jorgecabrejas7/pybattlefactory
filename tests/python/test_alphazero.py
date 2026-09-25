@@ -126,15 +126,19 @@ def test_value_target_and_start_weights():
 def selfplay_samples():
     torch.set_num_threads(2)
     v = encode.VERSION
-    sp = AZ.SelfPlayer(AZ.worker_cfg(AZ.parse(TINY)), seed=3)
     got = {k: [] for k in AZ.KINDS}
-    for _ in range(40):
-        out, st = sp.play(60)
-        for k, d in out.items():
-            if d is not None:
-                got[k].append(d)
-        if all(got.values()):
-            break
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv(search.TRAINING_ENV, "1")         # the default opponent prior (factory_sets) is training-only
+        cfg = AZ.worker_cfg(AZ.parse(TINY))
+        assert cfg["opponent_prior"] == "factory_sets"
+        sp = AZ.SelfPlayer(cfg, seed=3)
+        for _ in range(40):
+            out, st = sp.play(60)
+            for k, d in out.items():
+                if d is not None:
+                    got[k].append(d)
+            if all(got.values()):
+                break
     encode.set_version(v)
     return {k: AZ.merge([{k: d} for d in v] + [{}])[k] if v else None for k, v in got.items()}
 

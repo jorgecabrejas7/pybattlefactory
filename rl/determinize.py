@@ -33,6 +33,18 @@ learnsets, and Smeargle (Sketch) may know any move.
 
 The Factory's own rules (pool, fixed IVs, set-built max HP) stay below for tests and analysis only: the legal
 sampler never calls them.
+
+Training-time sampler "factory_sets" (sample_factory_sets, docs/RL_DECISIONS.md §18, decided 2026-09-25): for the
+searches DURING TRAINING only (the battler's determinizations and the tactician's simulated opponents), the opponent
+Pokemon are drawn from the Battle Factory's set list, the way the game draws them: the round's pool
+(sInitialRentalMonRanges; level 50 without the high tier; no Unown), no repeated species or held item in the team,
+the species on screen when the team was generated excluded (pybattle.backend.OpponentKnowledge; Noland: set ids
+excluded). A set gives species, moves and held item; the ability is the species' coin flip, as in the game; IVs
+(uniform 0-31), EVs (the random spread of _evs: the v4 assumption, any 0-252 per stat) and nature (uniform) are
+never taken from the set. Everything the player saw is kept: a seen Pokemon's set must contain its revealed moves
+and item; HP inside its bar, statuses and hidden counters as above; a seen Pokemon no consistent set explains falls
+back to the strict draw. A player learns the sets by playing; the network input never contains them. Refused
+outside training (rl.search.in_training): evaluation and inference keep the strict sampler.
 """
 
 import json
@@ -46,6 +58,7 @@ from pybattle.view import _DATA, HP_BAR_PIXELS, NAMES, SPECIES, hp_bar_pixels, p
 
 KEEP = -1
 NUM_NATURES = 25
+PRIORS = ("strict", "factory_sets")     # opponent samplers: player knowledge / the Factory's set list (training)
 MAX_EVS, MAX_EV_PER_STAT = 510, 252
 
 _SPECIES_ID = {v: int(k) for k, v in NAMES["species"].items()}
@@ -261,6 +274,26 @@ def team_level(view) -> int:
     return view.own_party[0].level
 
 
+def check_prior(prior):
+    """The opponent sampler `prior` may be used in this process: "factory_sets" only in training."""
+    if prior not in PRIORS:
+        raise ValueError(f"opponent prior must be one of {PRIORS}, not {prior!r}")
+    if prior == "factory_sets":
+        from .search import in_training
+        if not in_training():
+            raise PermissionError("the factory_sets opponent sampler is for training-time search only "
+                                  "(evaluation and inference use the strict sampler)")
+
+
+def determinization(view, knowledge=None, rng=None, open_level=True, prior="strict"):
+    """Gen3Game.determinize specs drawn with the sampler `prior`: "strict" (sample_determinization) or
+    "factory_sets" (sample_factory_sets; training only, needs the opponent's OpponentKnowledge)."""
+    if prior == "strict":
+        return sample_determinization(view, None, rng, open_level=open_level)
+    check_prior(prior)
+    return sample_factory_sets(view, knowledge, rng, open_level=open_level)
+
+
 def sample_determinization(view, ctx=None, rng=None, open_level=True):
     """Specs for Gen3Game.determinize drawn from player knowledge (see the module docstring):
     [(party_slot, species | KEEP, [4 moves], item, [6 IVs], [6 EVs], nature, ability_bit, hp_fraction)].
@@ -293,6 +326,109 @@ def sample_determinization(view, ctx=None, rng=None, open_level=True):
             item = items[rng.randrange(len(items))] if items else 0
             if item:
                 used_items.add(item)
+        ivs = [rng.randrange(32) for _ in range(6)]
+        evs = _evs(rng)
+        nature = rng.randrange(NUM_NATURES)
+        bit = _ability_bit(species, m if m.seen else None, rng)
+        hp = _hp_fraction(max_hp_of(species, ivs[0], evs[0], level), m.hp_pixels, rng) if m.seen else 1.0
+        specs.append((i, species, moves, item, ivs, evs, nature, bit, hp))
+    return specs
+
+
+# ---- the training-time sampler: the Factory's set list -------------------------------------------------------------
+
+# SetMonMoveAvoidReturn: the moves the opponent really knows (Return is given as Frustration)
+SET_MOVES_AS_BUILT = [tuple(_MOVE_ID["MOVE_FRUSTRATION"] if x == _MOVE_ID["MOVE_RETURN"] else x for x in m["moves"])
+                      for m in FRONTIER_MONS]
+_SET_MOVESET = [frozenset(x for x in mv if x) for mv in SET_MOVES_AS_BUILT]
+factory_stats = {"seen_slots": 0, "fallback": 0}           # seen Pokemon no Factory set explains (strict draw)
+
+
+def factory_pool(knowledge, open_level=True) -> np.ndarray:
+    """Set ids the opponent team described by `knowledge` (pybattle.backend.OpponentKnowledge) is drawn from."""
+    ids = pool(knowledge.challenge, open_level)
+    if knowledge.noland:
+        if knowledge.set_ids:
+            ids = ids[~np.isin(ids, np.array(sorted(knowledge.set_ids), np.int64))]
+    elif knowledge.species:
+        ids = ids[~np.isin(SET_SPECIES[ids], np.array(sorted(knowledge.species), np.int64))]
+    return ids
+
+
+def _free(ids, used_species, used_items):
+    """Sets of `ids` whose species is not in the team and whose held item (if any) is not held by a team member."""
+    ok = ~np.isin(SET_SPECIES[ids], np.array(sorted(used_species), np.int64))
+    items = SET_ITEM[ids]
+    ok &= (items == 0) | ~np.isin(items, np.array(sorted(used_items), np.int64))
+    return ids[ok]
+
+
+def _strict_moves_item(m, level, used_items, rng):
+    """A seen Pokemon's moves and item by the strict rules (no Factory set explains what it showed)."""
+    revealed = [x for x in m.revealed_moves if x][:4]
+    rest = [x for x in learnable(m.species, level) if x not in revealed]
+    n_more = min(4 - len(revealed), len(rest))
+    moves = revealed + (rng.sample(rest, n_more) if n_more > 0 else [])
+    moves += [0] * (4 - len(moves))
+    if m.revealed_item:
+        return moves, m.revealed_item
+    items = [x for x in plausible_items(m.species) if x not in used_items]
+    return moves, (items[rng.randrange(len(items))] if items else 0)
+
+
+def sample_factory_sets(view, knowledge, rng=None, open_level=True):
+    """Specs for Gen3Game.determinize (sample_determinization's layout) with the opponent's Pokemon drawn from the
+    Factory's set list (training-time search only; see the module docstring). knowledge: the opponent's
+    pybattle.backend.OpponentKnowledge (the round, Noland, the exclusions of its generation)."""
+    if knowledge is None:
+        raise ValueError("factory_sets needs the opponent's OpponentKnowledge (SimBackend.opponent_knowledge)")
+    rng = rng or random.Random()
+    level = team_level(view)
+    enemy = view.enemy_party[:3]
+    ids = factory_pool(knowledge, open_level)
+    used_species = {m.species for m in enemy if m.seen}
+    used_items = {m.revealed_item for m in enemy if m.seen and m.revealed_item}
+    drawn = {}
+    # the seen Pokemon first (their species are fixed), then the unseen ones; each uniform over the sets still legal
+    # (the game draws set ids uniformly from the pool and rejects repeated species / items)
+    for i in sorted(range(len(enemy)), key=lambda j: not enemy[j].seen):
+        m = enemy[i]
+        if m.seen and m.fainted:
+            drawn[i] = None
+            continue
+        if m.seen:
+            factory_stats["seen_slots"] += 1
+            revealed = frozenset(x for x in m.revealed_moves if x)
+            same = ids[SET_SPECIES[ids] == m.species]
+            if m.revealed_item:
+                same = same[SET_ITEM[same] == m.revealed_item]
+            else:
+                same = _free(same, set(), used_items)
+            cand = [int(k) for k in same if revealed <= _SET_MOVESET[k]]
+            if not cand:
+                factory_stats["fallback"] += 1
+                moves, item = _strict_moves_item(m, level, used_items, rng)
+                if item:
+                    used_items.add(item)
+                drawn[i] = (m.species, moves, item)
+                continue
+        else:
+            cand = _free(ids, used_species, used_items)
+            if len(cand) == 0:                  # (never: a pool is far larger than a team)
+                raise RuntimeError("no Factory set left for an unseen opponent")
+        k = int(cand[rng.randrange(len(cand))])
+        species, item = int(SET_SPECIES[k]), int(SET_ITEM[k])
+        used_species.add(species)
+        if item:
+            used_items.add(item)
+        drawn[i] = (species, list(SET_MOVES_AS_BUILT[k]), item)
+    specs = []
+    for i, m in enumerate(enemy):
+        d = drawn[i]
+        if d is None:
+            specs.append((i, KEEP, [0, 0, 0, 0], 0, [0] * 6, [0] * 6, 0, 0, -1.0))
+            continue
+        species, moves, item = d
         ivs = [rng.randrange(32) for _ in range(6)]
         evs = _evs(rng)
         nature = rng.randrange(NUM_NATURES)

@@ -594,7 +594,8 @@ de §16 (d = 128, 2 capas, `share="embeddings"`), tasa de aprendizaje *cosine*.
 
 **Combatiente**:
 - Decide el MCTS en C++ de §15, siempre en modo legal (`AZBattler` no tiene parámetro de modo): K = 8
-  determinizaciones, `redraw_turn` en cada raíz y 128 simulaciones (`--sims`).
+  determinizaciones, `redraw_turn` en cada raíz y 128 simulaciones (`--sims`). El rival de cada determinización se
+  sortea con `--opponent-prior` (por defecto `factory_sets`, ver «Rival de las búsquedas de entrenamiento» abajo).
 - **Ruido de Dirichlet** en los priors de la raíz (α = 0,3, peso 0,25), añadido en Python antes de la búsqueda.
 - La acción se muestrea de las visitas con temperatura 1 (`--temperature`).
 - **Objetivos**:
@@ -607,9 +608,10 @@ de §16 (d = 128, 2 capas, `share="embeddings"`), tasa de aprendizaje *cosine*.
 - Cada opción (alquileres legales (primero, pareja), hasta 60; intercambios, ≤ 10) se valora con combates simulados
   en juegos clonados:
   1. se aplica la opción (`factory_rent` / `factory_swap`, que ya rellenan `gEnemyParty` con el rival real);
-  2. **antes del primer frame del combate se sustituye el equipo rival entero** por uno sorteado con el criterio
-     estricto de §15, con los 3 Pokémon sin ver: especie uniforme entre las de la Frontera, movimientos aprendibles,
-     objeto con efecto, IVs/EVs/naturaleza/habilidad al azar y PS completos. Como plantilla se usa una copia de
+  2. **antes del primer frame del combate se sustituye el equipo rival entero** por uno sorteado con
+     `--opponent-prior`: por defecto de la lista de sets de la Factory (`factory_sets`, abajo); con `strict`, con el
+     criterio estricto de §15 y los 3 Pokémon sin ver (especie uniforme entre las de la Frontera, movimientos
+     aprendibles, objeto con efecto, IVs/EVs/naturaleza/habilidad al azar y PS completos). Como plantilla se usa una copia de
      nuestro equipo (nivel e id de entrenador), y el RNG se vuelve a sembrar con el de la búsqueda.
      **Nada del rival real** (RAM, pista del encargado, posición del RNG) llega a la simulación: hay un test que cambia
      el rival real (`gFrontierTempParty`) y comprueba que la búsqueda da exactamente lo mismo;
@@ -618,7 +620,8 @@ de §16 (d = 128, 2 capas, `share="embeddings"`), tasa de aprendizaje *cosine*.
      copia en CPU, porque una ida y vuelta al servidor cuesta más;
   4. valor de una simulación, en las unidades del retorno del táctico (victorias hasta el final de la racha, γ = 1):
      0 si pierde; si gana, 1 + V_t(siguiente decisión del táctico) según la red de valor del táctico
-     (`--t-bootstrap 1`; la pantalla de intercambio simulada solo muestra la especie del equipo derrotado), o solo 1
+     (`--t-bootstrap 1`; la pantalla de intercambio simulada muestra el equipo derrotado tal como lo vio el jugador
+     en el combate simulado, ver «Pantalla de intercambio simulada» abajo), o solo 1
      (`--t-bootstrap 0`). Se corta a las 100 decisiones (`--t-max-decisions`), y entonces vale lo que estime la red.
 - **Reparto**: Gumbel top-m + *sequential halving* (Danihelka et al., 2022). Se simulan las m = 16 opciones con mayor
   log π + ruido de Gumbel. Con 256 combates por decisión (`--t-budget`) quedan 4 rondas: 4 combates por opción, la
@@ -671,16 +674,90 @@ python -m rl.alphazero --name alphazero_v1        # valores por defecto = los de
 python -m rl.az_bench --workers 18 --decisions 200  # velocidad de autojuego
 ```
 
+### Rival de las búsquedas de entrenamiento: la lista de sets de la Factory (decidido por el usuario, 2026-09-25)
+
+Definiciones, de abajo arriba:
+- Un **set** es una ficha fija de la Battle Factory: especie, 4 movimientos, objeto equipado, naturaleza y reparto de
+  EVs. El juego tiene 882 (`gBattleFrontierMons`). Cuando genera un rival no inventa nada: elige sets de esa lista.
+- El **pool** de una ronda es el rango de sets del que el juego sortea los rivales de esa ronda
+  (`sInitialRentalMonRanges`: 96 sets en las rondas 1–4 a nivel abierto, 510 desde la 5; a nivel 50 sin los de nivel
+  alto; nunca Unown). Reglas visibles al generar un equipo: nada de especies repetidas, nada de objetos repetidos, y
+  ninguna especie de las que había en pantalla cuando se generó (los 6 alquileres, o nuestro equipo más el equipo
+  derrotado en la pantalla de intercambio). Noland (el jefe) sortea del mismo pool pero excluye *sets*, no especies
+  (los de nuestro equipo tras el intercambio y los del equipo derrotado), y lo hace al empezar el combate.
+- Una **determinización** (§15) es un mundo completo sorteado para lo que el jugador no ve del rival (quién es cada
+  Pokémon no visto, sus movimientos, objeto, IVs, EVs, naturaleza, habilidad, PS exactos dentro de la barra). El
+  **muestreador** (*prior* del rival) es la regla con que se sortea.
+- El **muestreador estricto** (§15) usa solo lo que sabe un jugador que no conoce la lista: especie cualquiera de la
+  Frontera, movimientos aprendibles al azar, cualquier objeto útil. Produce rivales absurdos y débiles (tabla abajo).
+
+**Decisión**:
+- **Durante el entrenamiento**, las dos búsquedas (las determinizaciones del combatiente y los rivales simulados del
+  táctico) sortean los rivales de **la lista de sets de la Factory** (`--opponent-prior factory_sets`, el valor por
+  defecto de `rl.alphazero`): el pool de la ronda, con las reglas de arriba, tomando del set la especie, los
+  movimientos y el objeto; la habilidad es una moneda al aire entre las dos de la especie, como en el juego.
+  **Nunca** se toman del set los IVs, los EVs ni la naturaleza: IVs uniformes 0–31, EVs con el reparto aleatorio
+  legal de siempre (hasta 510 en total, hasta 252 por estadística: la misma suposición que las cotas de la
+  codificación v4) y naturaleza uniforme.
+- Se mantiene todo lo que el jugador vio: especie, movimientos, objeto y habilidad revelados, la barra de PS, el
+  estado, los rivales ya vistos, y las reglas estrictas de §15. Un Pokémon visto solo puede recibir sets compatibles
+  con lo revelado (sus movimientos revelados incluidos en el set, su objeto revelado igual al del set); si ningún set
+  lo explica (≈ 0,2 % de los Pokémon vistos, p. ej. un movimiento copiado), ese Pokémon se sortea con la regla
+  estricta.
+- Justificación: un jugador aprende los sets jugando (son pocos por especie y se repiten); la entrada de la red
+  **nunca** los contiene, solo la búsqueda que genera los objetivos de entrenamiento.
+- **En inferencia y evaluación** (`rl/eval_rounds.py`, `rl/evaluate.py`, agentes de `watch`, el valor por defecto de
+  `SearchBattler`) se sigue usando el muestreador estricto.
+- **Candado**: `factory_sets` solo existe en un proceso marcado como entrenamiento (`mark_training()` /
+  `_TRAINING_MAINS`); fuera de él, pedirlo lanza `PermissionError` (`rl/determinize.py check_prior`, comprobado al
+  construir `SearchBattler` / `TacticianSearch` y en cada búsqueda). El modo perfecto sigue prohibido en entrenamiento.
+- **Lo que sabe el jugador de la generación** (`pybattle.backend.OpponentKnowledge`): la ronda, si es Noland, y las
+  exclusiones, anotadas por `SimBackend` en cada pantalla de alquiler / intercambio (`opponent_knowledge_for`) a
+  partir de lo que muestra la pantalla. **El equipo real nunca se lee**: hay tests que cambian el rival real
+  (`gFrontierTempParty`) y comprueban que las dos búsquedas dan exactamente lo mismo, y un test que comprueba que el
+  equipo real siempre está dentro del pool que describe `OpponentKnowledge`.
+- Se mantienen: el valor de una opción del táctico con *bootstrap* 1 + V_t(s′) (V_t: la red de valor del táctico; s′:
+  la siguiente decisión del táctico tras ganar el combate simulado), para que Q y z estén en las mismas unidades; el
+  objetivo de política del táctico = visitas del *sequential halving*; y las evaluaciones del táctico en la CPU de
+  cada proceso.
+
+### Pantalla de intercambio simulada (corregido 2026-09-25)
+
+El *bootstrap* necesita la observación de la pantalla de intercambio que sigue a un combate simulado ganado. Antes,
+el equipo derrotado salía solo con su especie y los registros v4 del rival derrotado (§17) iban a cero, porque el
+observador C++ de las simulaciones no guardaba lo revelado ni los registros. Ahora `ObsMemory` lleva los registros
+(`records`, `team_max_hp`, `finish`, portados de `BattleObserver`) y expone lo revelado; el simulador llama a
+`finish` en el momento en que se decide el combate (como `SimBackend`) y la pantalla simulada se construye con esa
+memoria. Test: la observación simulada es idéntica, bit a bit, a la de `SimBackend` tras jugar el mismo combate
+(observador C++ y Python).
+
+### Diagnóstico: ¿cómo de fuertes son los rivales simulados?
+
+Al inicio de la ronda k (pantalla de alquiler, racha 7(k − 1)), con el alquiler voraz de la propia red, el primer
+combate lo juega la red del combatiente (voraz, sin búsqueda, como en las simulaciones) contra un rival sorteado con
+cada muestreador o contra el rival real (el que generó el juego, con el RNG resembrado en cada combate). 512 combates
+por casilla (128 comienzos × 4). A la derecha, los resultados reales de la red en toda la ronda (`eval_round`, 192
+rachas, voraz, solo red). `scripts/diag_sim_opponents.py`.
+
+| Red | Ronda | Rival estricto | Rival `factory_sets` | Rival real | Real: victorias por combate (ronda entera) | Real: rondas completadas |
+|---|---|---|---|---|---|---|
+| v3 | 1 | 99,8 % | 94,5 % | 93,6 % | 94,6 % | 68,2 % |
+| v3 | 3 | 100,0 % | 91,2 % | 93,6 % | 88,5 % | 38,5 % |
+| v3 | 5 | 99,6 % | 80,3 % | 73,0 % | 78,1 % | 18,8 % |
+| sin entrenar | 1 | 56,8 % | 26,4 % | 26,2 % | 22,9 % | 0,0 % |
+| sin entrenar | 3 | 50,2 % | 17,0 % | 15,2 % | 15,4 % | 0,0 % |
+| sin entrenar | 5 | 52,3 % | 8,2 % | 8,6 % | 10,3 % | 0,0 % |
+
+Porcentaje de victorias en el primer combate de la ronda (salvo las dos últimas columnas). El muestreador estricto da
+rivales tan débiles que v3 gana casi siempre (99,6–100 %) y una red sin entrenar gana la mitad; con `factory_sets`
+la tasa de victoria queda a pocos puntos de la del rival real (v3: 94,5 / 91,2 / 80,3 % frente a 93,6 / 93,6 / 73,0 %;
+sin entrenar: 26,4 / 17,0 / 8,2 % frente a 26,2 / 15,2 / 8,6 %). Los cortes por límite de decisiones son ≤ 0,8 %. La
+diferencia que queda en la ronda 5 (v3: 80,3 % frente a 73,0 %) es coherente con no tomar del set los EVs, los IVs ni
+la naturaleza: un set real reparte siempre 510 EVs en sus estadísticas buenas, con una naturaleza a juego, mientras
+que el sorteo reparte de media la mitad de EVs y al azar (los IVs juegan a favor del rival sorteado: por el fallo de
+la Factory que usa el reto de la Battle Tower, el rival real de estas rachas tiene IVs de 3, y el sorteado, 15,5 de
+media).
+
 **Pendiente de decidir** (elegido provisionalmente al implementar):
-- El rival de las simulaciones del táctico sale del sorteo estricto (sets aleatorios), así que es **mucho más débil**
-  que un rival real de la Factory. Al inicio de la ronda 3 (256 combates simulados), la red v3 gana el 98 % de esos
-  combates y una red sin entrenar, el 79 %; contra los rivales reales de esa ronda, v3 completa solo el 38 % de las
-  rondas. Por eso los Q del táctico son optimistas y distinguen poco entre opciones.
-  Alternativas, si el usuario las autoriza: sortear los sets de la lista de la Factory (conocimiento de un jugador
-  experto, excluido por la regla estricta), o un rival sorteado más fuerte (p. ej., los mejores movimientos de la
-  especie).
-- El valor de una simulación del táctico usa el *bootstrap* con V_t, para que Q y z estén en las mismas unidades.
-  Sin él (`--t-bootstrap 0`), Q sería P(ganar el siguiente combate) y no se podría mezclar con z.
-- Objetivo de política del táctico: visitas del *halving* frente a softmax(Q/T).
 - Tamaño de la iteración: 40.000 decisiones del combatiente (`--decisions-per-iter`) y 200 iteraciones planeadas.
 - La evaluación por ronda en cada iteración (192 × 6 rachas) para el autojuego mientras dura.
