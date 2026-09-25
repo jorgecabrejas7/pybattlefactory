@@ -387,6 +387,7 @@ class RunInfo:
     open_level: bool
     wins: int
     rents: int = 0                  # the Factory's rental counter (shown in the records; better rentals later)
+    noland: bool = False            # the current / next battle is against the Factory Head (Noland)
 
 
 # ---------------------------------------------------------------------------

@@ -18,13 +18,11 @@ import struct
 
 import numpy as np
 
-from pybattle.backend import Phase, SimBackend
+from pybattle.backend import Phase, SimBackend, rents_offset
 from pybattle.emu.decode import SYMBOLS as S, decode_battle_mon, decode_party
 from . import encode
 
 NO_ACTION = object()      # "just run to the next decision" (None is a real action: keep the team at a swap)
-RENTS_OFFSET = 0xDF4
-FLAG_SYS_FACTORY_SILVER = 0x860 + 0x6C      # SYSTEM_FLAGS + 0x6C (constants/flags.h)     # SaveBlock2 frontier.factoryRentsCount[singles][open] (global.h's comment is off by 2)
 
 
 def potential(game, view, w_hp=0.4, w_alive=0.4, w_stages=0.2):
@@ -67,11 +65,9 @@ class FactoryEnv:
         else:
             k = self.win_streak // 7          # a fixed later start gets a random feasible rental counter too
             self.start_streak, rents = self.win_streak, (self.start_rng.randint(k, 7 * k) if k else 0)
+        # (SimBackend.reset gives the run the symbols a player with this streak holds: Noland's silver from 21,
+        # the gold from 42; without them the game would not schedule his later battles, GetFrontierBrainStatus)
         self.backend.reset(seed=seed, win_streak=self.start_streak, rents_count=rents)
-        if self.start_streak >= 21:
-            # a player with a streak of 21+ has beaten Noland at battle 21: without the silver symbol the game
-            # would not schedule his gold battle at 42 (GetFrontierBrainStatus)
-            self.backend.game.set_flag(FLAG_SYS_FACTORY_SILVER, True)
         self.b_pending, self.b_phi = False, 0.0
         self.t_pending, self.t_acc = False, 0
         self.decisions = 0
@@ -79,7 +75,8 @@ class FactoryEnv:
 
     def _ctx(self):
         info = self.backend.run_info()
-        rents = int.from_bytes(self.backend.game.read_saveblock2(RENTS_OFFSET, 2), "little")
+        rents = int.from_bytes(self.backend.game.read_saveblock2(rents_offset(self.backend.open_level), 2),
+                               "little")
         return {"streak": info.win_streak, "battle": info.battle_in_challenge, "challenge": info.challenge_num,
                 "rents": rents}
 

@@ -518,10 +518,9 @@ class Viewer:
         stats = []
         if self.info is not None:
             i = self.info
-            battle_no = i.challenge_num * 7 + i.battle_in_challenge + 1
             rnd = i.challenge_num + 1
             stats += [("ROUND", f"{rnd}/6" if rnd <= 6 else f"{rnd}"),
-                      ("BATTLE", f"{i.battle_in_challenge + 1}/7" + ("  NOLAND" if battle_no in (21, 42) else "")),
+                      ("BATTLE", f"{i.battle_in_challenge + 1}/7" + ("  NOLAND" if getattr(i, "noland", False) else "")),
                       ("STREAK", str(i.win_streak)), ("RUN WINS", str(i.wins)), ("RENTALS", str(i.rents))]
         if self.run_no:
             stats.append(("RUN", f"#{self.run_no}"))

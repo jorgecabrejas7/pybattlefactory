@@ -15,7 +15,7 @@ Actions by phase:
 import enum
 from typing import Optional, Tuple, Union
 
-from .emu.decode import SYMBOLS as S, decode_party, decode_pokemon
+from .emu.decode import SB2_FACTORY_RENTS_COUNT, SYMBOLS as S, decode_party, decode_pokemon
 from .pybattle_native import Gen3Game
 from .view import BattleObserver, BattleView, OwnMon, RentalView, RunInfo, SwapView
 
@@ -29,6 +29,34 @@ class Phase(enum.Enum):
 
 
 Action = Union[Tuple[int, int, int], None, Tuple[int, int], Tuple[str, int], Tuple[str]]
+
+# ---- Battle Factory rules shared by both backends ------------------------------------------------------------------
+
+FLAG_SYS_FACTORY_SILVER = 0x860 + 0x6C       # SYSTEM_FLAGS + 0x6C (constants/flags.h)
+FLAG_SYS_FACTORY_GOLD = 0x860 + 0x6D
+NO_HINT = (18, 0)                           # hint_type NUMBER_OF_MON_TYPES, hint_style FACTORY_STYLE_NONE
+
+
+def factory_symbols_for_streak(streak: int) -> int:
+    """Symbols a player with this Factory singles streak holds: Noland's silver is won at battle 21, the gold at 42
+    (a streak of 21+ went through battle 21, so the silver symbol is necessarily there)."""
+    return int(streak >= 21) + int(streak >= 42)
+
+
+def factory_brain_status(streak: int, symbols: int) -> int:
+    """GetFrontierBrainStatus (frontier_util.c) for the Factory's next battle, with `streak` wins so far:
+    0 not Noland, 1 silver (21), 2 gold (42), 3 / 4 again at 21 / 42 and every 21 after with both symbols."""
+    s = streak + 1
+    if symbols < 2:
+        return symbols + 1 if s == (21, 42)[symbols] else 0
+    if s == 21:
+        return 3
+    return 4 if s == 42 or (s > 42 and (s - 42) % 21 == 0) else 0
+
+
+def rents_offset(open_level: bool) -> int:
+    """SaveBlock2 offset of factoryRentsCount[singles][lvlMode]."""
+    return SB2_FACTORY_RENTS_COUNT + 2 * int(bool(open_level))
 
 
 class FactoryBackend:
@@ -57,9 +85,18 @@ class SimBackend(FactoryBackend):
     # --- lifecycle --------------------------------------------------------------------
 
     def reset(self, seed: int = 0, win_streak: int = 0, rents_count: int = 0) -> None:
+        """A new run from `win_streak` (the symbols a player with that streak holds are set: see
+        factory_symbols_for_streak) and `rents_count`. Nothing of a previous run is kept."""
         self.game = Gen3Game()
+        symbols = factory_symbols_for_streak(win_streak)
+        self.game.set_flag(FLAG_SYS_FACTORY_SILVER, symbols >= 1)
+        self.game.set_flag(FLAG_SYS_FACTORY_GOLD, symbols >= 2)
         self.game.factory_begin(self.open_level, win_streak, rents_count, seed & 0xFFFFFFFF)
         self._start_streak = win_streak
+        self._turns = 0
+        self._observer = BattleObserver()
+        self._observer_done = None
+        self.last_battle_won = None
         self._sync()
 
     def clone(self) -> "SimBackend":
@@ -129,8 +166,13 @@ class SimBackend(FactoryBackend):
         info = self.game.factory_info
         streak = self._start_streak + info.wins
         battle_num = self.game.read_saveblock2(0xCB2, 2)
-        rents = int.from_bytes(self.game.read_saveblock2(0xDF4, 2), "little")   # factoryRentsCount[singles][open]
-        return RunInfo(streak, int.from_bytes(battle_num, "little"), streak // 7, self.open_level, info.wins, rents)
+        rents = int.from_bytes(self.game.read_saveblock2(rents_offset(self.open_level), 2), "little")
+        if self.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
+            noland = info.brain_status != 0
+        else:
+            noland = factory_brain_status(streak, factory_symbols_for_streak(streak)) != 0
+        return RunInfo(streak, int.from_bytes(battle_num, "little"), streak // 7, self.open_level, info.wins, rents,
+                       noland)
 
     # --- actions ------------------------------------------------------------------------
 

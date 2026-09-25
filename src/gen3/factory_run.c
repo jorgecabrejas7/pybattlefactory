@@ -162,8 +162,19 @@ static void FinishBattle(void)
     // ReturnToRoomFromBattle: the defeated team becomes the swap candidates
     FactoryFunc(BATTLE_FACTORY_FUNC_SET_OPPONENT_MONS, 0, 0);
     FactoryFunc(BATTLE_FACTORY_FUNC_RESET_HELD_ITEMS, 0, 0);
-    // AskSwapMon: the next opponent is generated (and hinted at) before the swap question
-    GenerateNextOpponent();
+    if (FrontierUtil(FRONTIER_UTIL_FUNC_GET_BRAIN_STATUS, 0, 0) != FRONTIER_BRAIN_NOT_READY)
+    {
+        // AskReadyForHead -> AskSwapBeforeHead: no opponent is generated before Noland's battle
+        // and the attendant "can't tell anything" about him (FillFactoryBrainParty draws his team
+        // when the battle starts)
+        sRun.hintType = GEN3_FACTORY_NO_HINT_TYPE;
+        sRun.hintStyle = GEN3_FACTORY_NO_HINT_STYLE;
+    }
+    else
+    {
+        // AskSwapMon: the next opponent is generated (and hinted at) before the swap question
+        GenerateNextOpponent();
+    }
     sRun.phase = GEN3_FACTORY_SWAP;
 }
 
@@ -209,7 +220,17 @@ u16 Gen3Factory_RentalFrontierMonId(u8 i)
 // Rent three mons (select-screen positions, in party order) and start the next battle.
 int Gen3Factory_Rent(u8 a, u8 b, u8 c)
 {
-    if (sRun.phase != GEN3_FACTORY_RENTAL || !Host_FactoryRent(a) || !Host_FactoryRent(b) || !Host_FactoryRent(c))
+    u16 sa, sb, sc;
+
+    // Checked before touching the select screen, so a refused rental leaves it as it was
+    if (sRun.phase != GEN3_FACTORY_RENTAL || a >= 6 || b >= 6 || c >= 6 || a == b || a == c || b == c)
+        return FALSE;
+    sa = GetMonData(Host_FactoryRental(a), MON_DATA_SPECIES);
+    sb = GetMonData(Host_FactoryRental(b), MON_DATA_SPECIES);
+    sc = GetMonData(Host_FactoryRental(c), MON_DATA_SPECIES);
+    if (sa == sb || sa == sc || sb == sc)
+        return FALSE;
+    if (!Host_FactoryRent(a) || !Host_FactoryRent(b) || !Host_FactoryRent(c))
         return FALSE;
     Host_FactoryConfirmRentals();
     StartBattle();
@@ -220,7 +241,7 @@ int Gen3Factory_Rent(u8 a, u8 b, u8 c)
 // team's gEnemyParty[enemySlot]. Starts the next battle.
 int Gen3Factory_Swap(int playerSlot, int enemySlot)
 {
-    if (sRun.phase != GEN3_FACTORY_SWAP)
+    if (sRun.phase != GEN3_FACTORY_SWAP || playerSlot > 2 || (playerSlot >= 0 && (enemySlot < 0 || enemySlot > 2)))
         return FALSE;
     if (playerSlot >= 0)
     {

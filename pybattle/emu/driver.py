@@ -43,6 +43,9 @@ _DIR_NORTH = 2
 _SINGLES_ATTENDANT_SPOT = (4, 8)          # attendant stands at (4, 7), BattleFactoryLobby/map.json
 _LOBBY_EXIT_WARPS = ((9, 11), (10, 11))
 _STREAK_FACTORY_SINGLES = (1 << 8, 1 << 9)   # winStreakActiveFlags: [lv50, open]
+_SB1_FLAGS = 0x1270                          # SaveBlock1.flags (global.h)
+_FLAG_SYS_FACTORY_SILVER = 0x860 + 0x6C      # SYSTEM_FLAGS + 0x6C (constants/flags.h)
+_FLAG_SYS_FACTORY_GOLD = 0x860 + 0x6D
 _NUM_TASKS = 16
 
 
@@ -327,14 +330,36 @@ class FactoryDriver:
         self.mash_until(lambda: False, keys=K.KEY_B, max_frames=600)
 
     def set_factory_streak(self, streak: int, rents: int = 0, open_level: bool = True):
-        """Pretend an active singles win streak (the challenge keeps it instead of resetting).
+        """Pretend an active singles win streak (the challenge keeps it instead of resetting), with the Factory
+        symbols a player with that streak holds (silver from 21, gold from 42; as SimBackend.reset).
         Must be called in the lobby, before start_challenge()."""
+        from ..backend import factory_symbols_for_streak
         sb2 = self.saveblock2()
         lvl = 1 if open_level else 0
         flags = self.emu.read32(sb2 + SB2_FRONTIER_WIN_STREAK_ACTIVE)
         self.emu.write32(sb2 + SB2_FRONTIER_WIN_STREAK_ACTIVE, flags | _STREAK_FACTORY_SINGLES[lvl])
         self.emu.write(sb2 + SB2_FACTORY_WIN_STREAKS + lvl * 2, struct.pack("<H", streak))
         self.emu.write(sb2 + SB2_FACTORY_RENTS_COUNT + lvl * 2, struct.pack("<H", rents))
+        symbols = factory_symbols_for_streak(streak)
+        self.set_flag(_FLAG_SYS_FACTORY_SILVER, symbols >= 1)
+        self.set_flag(_FLAG_SYS_FACTORY_GOLD, symbols >= 2)
+
+    def saveblock1(self) -> int:
+        return self.emu.read32(S.addr("gSaveBlock1Ptr"))
+
+    def flag(self, flag_id: int) -> bool:
+        """An event flag (SaveBlock1 flags, FlagGet)."""
+        return bool(self.emu.read8(self.saveblock1() + _SB1_FLAGS + flag_id // 8) >> (flag_id % 8) & 1)
+
+    def set_flag(self, flag_id: int, on: bool):
+        addr = self.saveblock1() + _SB1_FLAGS + flag_id // 8
+        v = self.emu.read8(addr)
+        v = v | (1 << flag_id % 8) if on else v & ~(1 << flag_id % 8)
+        self.emu.write(addr, bytes([v & 0xFF]))
+
+    def factory_symbols(self) -> int:
+        """Battle Factory symbols held (GetPlayerSymbolCountForFacility)."""
+        return int(self.flag(_FLAG_SYS_FACTORY_SILVER)) + int(self.flag(_FLAG_SYS_FACTORY_GOLD))
 
     # -- walking ----------------------------------------------------------------
 

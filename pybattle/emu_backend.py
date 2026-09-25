@@ -8,7 +8,7 @@ agent sees identical observations in both. The emulator walks through the game's
 import struct
 from typing import Optional
 
-from .backend import Action, FactoryBackend, Phase
+from .backend import NO_HINT, Action, FactoryBackend, Phase, factory_brain_status, rents_offset
 from .emu.decode import SYMBOLS as S, decode_party
 from .emu.driver import LAYOUT_LOBBY, LAYOUT_PRE_BATTLE_ROOM, Decision, FactoryDriver, K
 from .view import MOVES, BattleObserver, OwnMon, RentalView, RunInfo, SwapView
@@ -188,32 +188,47 @@ class EmuBackend(FactoryBackend):
         if self.phase == Phase.RENTAL:
             cands = d.rental_candidates()
             return RentalView([OwnMon.from_party(c.mon) for c in cands], [c.frontier_mon_id for c in cands],
-                              *d.hints())
+                              *self._hints())
         if self.phase == Phase.SWAP:
             own = [OwnMon.from_party(m) for m in decode_party(d.emu.read(S.addr("gPlayerParty"), 300))[:3]]
-            return SwapView(own, self._observer.swap_candidates(d.emu), *d.hints())
+            return SwapView(own, self._observer.swap_candidates(d.emu), *self._hints())
         if self.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
             ram = _FieldOrderRam(d)
             return self._observer.observe(ram, self.phase == Phase.FORCED_SWITCH, unusable_moves(d.emu), can_switch(d.emu))
         return None
+
+    def _noland_next(self) -> bool:
+        sb2 = self.d.saveblock2()
+        streak = self.d.emu.read16(sb2 + 0xDE2 + 2 * (1 if self.open_level else 0))
+        return factory_brain_status(streak, self.d.factory_symbols()) != 0
+
+    def _hints(self):
+        """The attendant's hints about the next opponent. Before Noland's battle the game generates no opponent
+        and says nothing (AskSwapBeforeHead): the variables hold stale values, so the canonical "no hint" is used,
+        as in the simulator (src/gen3/factory_run.c)."""
+        return NO_HINT if self._noland_next() else self.d.hints()
 
     def run_info(self) -> RunInfo:
         """Read from the save block, so it is right however the run was started."""
         sb2 = self.d.saveblock2()
         streak = self.d.emu.read16(sb2 + 0xDE2 + 2 * (1 if self.open_level else 0))
         battle_num = self.d.emu.read16(sb2 + 0xCB2)
-        rents = self.d.emu.read16(sb2 + 0xDF4)        # factoryRentsCount[singles][open] (global.h's comment is off by 2)
-        return RunInfo(streak, battle_num, streak // 7, self.open_level, self.wins, rents)
+        rents = self.d.emu.read16(sb2 + rents_offset(self.open_level))
+        if self.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
+            noland = self.d.emu.read16(S.addr("gTrainerBattleOpponent_A")) == 1022    # TRAINER_FRONTIER_BRAIN
+        else:
+            noland = factory_brain_status(streak, self.d.factory_symbols()) != 0
+        return RunInfo(streak, battle_num, streak // 7, self.open_level, self.wins, rents, noland)
 
     # --- actions ------------------------------------------------------------------------
 
     def act(self, action: Action) -> None:
         d = self.d
         if self.phase == Phase.RENTAL:
-            self._observer = BattleObserver(*d.hints())      # the attendant's hints about the first opponent
+            self._observer = BattleObserver(*self._hints())  # the attendant's hints about the first opponent
             d.pick_rentals(list(action))
         elif self.phase == Phase.SWAP:
-            self._observer = BattleObserver(*d.hints())      # hints about the next opponent
+            self._observer = BattleObserver(*self._hints())  # hints about the next opponent
             if getattr(self, "_swap_screen_open", False):
                 self._swap_screen_open = False
                 if action is None:
