@@ -10,6 +10,7 @@ from pybattle.backend import Phase, SimBackend
 from pybattle.diff import _mask_battle_mons
 from pybattle.emu.decode import BATTLE_MON_SIZE, SYMBOLS as S, decode_battle_mon, decode_party
 from pybattle.pybattle_native import Gen3Game, MctsTree
+from rl import determinize as DET
 
 D = Gen3Game.Decision
 
@@ -155,8 +156,11 @@ def true_specs(g, hp_fraction=-1.0):
     ids = true_set_ids(g)
     specs = []
     for slot, mon in enumerate(enemy_party(g)[:3]):
-        specs.append((slot, ids[slot], mon.ivs[0], mon.ability_num, hp_fraction))
+        specs.append(DET.set_spec(slot, ids[slot], mon.ivs[0], mon.ability_num, hp_fraction))
     return specs
+
+
+KEEP_SPEC = lambda slot: (slot, DET.KEEP, [0] * 4, 0, [0] * 6, [0] * 6, 0, 0, -1.0)
 
 
 PARTY_FIELDS = ("species", "held_item", "moves", "pp", "evs", "ivs", "ability_num", "status", "level", "hp",
@@ -179,7 +183,7 @@ def test_determinize_with_true_sets_reproduces_the_game(seed, turns):
     assert all(ids[s] < 882 for s in range(3))
 
     d = g.clone()
-    d.determinize(true_specs(g), -1)
+    d.determinize(true_specs(g), None, -1)
     after_party = enemy_party(d)[:3]
     for a, o in zip(after_party, before_party):
         assert a.checksum_ok
@@ -205,7 +209,7 @@ def test_determinize_with_true_sets_reproduces_the_game(seed, turns):
 def test_determinize_keep_slot_is_a_no_op():
     g = start_battle(8).game.clone()
     before = g.read(S.addr("gEnemyParty"), 300), g.read(S.addr("gBattleMons"), 352)
-    g.determinize([(0, -1, 0, 0, -1.0), (1, -1, 0, 0, -1.0), (2, -1, 0, 0, -1.0)], -1)
+    assert not g.determinize([KEEP_SPEC(0), KEEP_SPEC(1), KEEP_SPEC(2)], None, -1)
     assert (g.read(S.addr("gEnemyParty"), 300), g.read(S.addr("gBattleMons"), 352)) == before
 
 
@@ -228,12 +232,12 @@ def test_determinize_with_other_sets_changes_the_mons_and_battles_finish(seed):
                 break
         used.add(set_id)
         frac = rng.choice([-1.0, 0.5, 1.0])
-        specs.append((slot, set_id, rng.choice([3, 6, 31]), rng.randrange(2), frac))
+        specs.append(DET.set_spec(slot, set_id, rng.choice([3, 6, 31]), rng.randrange(2), frac))
     d = g.clone()
-    d.determinize(specs, seed)
+    assert d.determinize(specs, None, seed) and d.determinized
     after = enemy_party(d)[:3]
-    for (slot, set_id, iv, _, frac), a, o in zip(specs, after, before):
-        assert a.checksum_ok and a.ivs == [iv] * 6 and a.friendship == 0
+    for (slot, species, moves, item, ivs, evs, nature, bit, frac), a, o in zip(specs, after, before):
+        assert a.checksum_ok and a.ivs == ivs and a.friendship == 0 and a.evs == evs and a.species == species
         assert sum(a.evs) in range(500, 511)
         assert a.status == o.status or (o.status & 7)   # sleep counters may be resampled
         if o.hp == 0 and frac < 0:
@@ -254,14 +258,24 @@ def test_determinize_with_other_sets_changes_the_mons_and_battles_finish(seed):
 def test_determinize_hp_fraction_and_bad_specs():
     g = start_battle(12).game.clone()
     specs = true_specs(g, hp_fraction=0.25)
-    g.determinize(specs, -1)
+    g.determinize(specs, None, -1)
     for m in enemy_party(g)[:3]:
         assert m.hp == max(1, int(m.max_hp * 0.25 + 0.5))
     assert battle_mon(g, 1).hp == enemy_party(g)[enemy_active_slot(g)].hp
+    good = specs[0]
+    bad = [(3,) + good[1:],                                              # party slot
+           good[:1] + (5000,) + good[2:],                                # species
+           good[:2] + ([0, 0, 0, 0],) + good[3:],                        # no move
+           good[:4] + ([32] * 6,) + good[5:],                            # IV > 31
+           good[:5] + ([252, 252, 252, 0, 0, 0],) + good[6:],            # EVs > 510
+           good[:6] + (25,) + good[7:]]                                  # nature
+    before = g.read(S.addr("gEnemyParty"), 300)
+    for spec in bad:
+        with pytest.raises(ValueError):
+            g.determinize([spec], None, -1)
     with pytest.raises(ValueError):
-        g.determinize([(3, 0, 3, 0, 1.0)], -1)
-    with pytest.raises(ValueError):
-        g.determinize([(0, 900, 3, 0, 1.0)], -1)
+        g.determinize([good[:5]], None, -1)                                # malformed tuple
+    assert g.read(S.addr("gEnemyParty"), 300) == before
 
 
 def test_hidden_counters_are_resampled():
@@ -269,23 +283,30 @@ def test_hidden_counters_are_resampled():
     status_addr = S.addr("gBattleMons") + BATTLE_MON_SIZE + 0x4C
     g.write(status_addr, struct.pack("<I", 5))                    # asleep, 5 turns left
     g.write(status_addr + 4, struct.pack("<I", 4 | (1 << 4)))     # confused (4) + uproar bits kept
-    seen_sleep, seen_conf = set(), set()
-    for seed in range(40):
-        d = g.clone()
-        d.determinize([], seed)
-        s1, s2 = struct.unpack("<2I", d.read(status_addr, 8))
-        assert 1 <= s1 <= 5 and s1 & ~7 == 0
-        assert 1 <= s2 & 7 <= 5 and s2 & ~7 == 1 << 4
-        seen_sleep.add(s1)
-        seen_conf.add(s2 & 7)
-    assert seen_sleep == set(range(1, 6)) and seen_conf == set(range(1, 6))
+    slot = enemy_active_slot(g)
+
+    def draws(sleep_elapsed, conf_elapsed, uproar_elapsed):
+        hidden = [0] * 14
+        hidden[3 + slot], hidden[7], hidden[11] = sleep_elapsed, conf_elapsed, uproar_elapsed
+        out = set()
+        for seed in range(60):
+            d = g.clone()
+            d.determinize([], hidden, seed)
+            s1, s2 = struct.unpack("<2I", d.read(status_addr, 8))
+            assert s1 & ~7 == 0 and s2 & ~0x77 == 0
+            out.add((s1, s2 & 7, (s2 >> 4) & 7))
+        return {x[0] for x in out}, {x[1] for x in out}, {x[2] for x in out}
+    # nothing seen yet: the full ranges when inflicted (sleep and confusion 2-5, Uproar 2-5)
+    assert draws(0, 0, 0) == (set(range(2, 6)), set(range(2, 6)), set(range(2, 6)))
+    # after 2 attempts asleep, 3 confused and 1 turn of Uproar: only what is still possible
+    assert draws(2, 3, 1) == ({1, 2, 3}, {1, 2}, {1, 2, 3, 4})
     d = g.clone()
-    d.determinize([], -1)
+    d.determinize([], None, -1)
     assert struct.unpack("<2I", d.read(status_addr, 8)) == (5, 4 | (1 << 4))
     # same seed, same result
     a, c = g.clone(), g.clone()
-    a.determinize([], 7)
-    c.determinize([], 7)
+    a.determinize([], None, 7)
+    c.determinize([], None, 7)
     assert a.read(status_addr, 8) == c.read(status_addr, 8)
 
 

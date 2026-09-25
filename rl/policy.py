@@ -13,6 +13,7 @@ class Policy:
         ck = torch.load(path, map_location=device)
         a = ck["args"]
         self.algo = a.get("algo", "ppo")
+        self.encode_version = a.get("encode_version", 2)
         self.steps = ck.get("battler_steps", 0)
         self.device = device
         self.path = path

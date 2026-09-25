@@ -157,14 +157,14 @@ def test_search_like_paths():
             o = b._observer.fast_copy()
             m = base_mem.copy()
             if k == 0:
-                specs = D.sample_determinization(v, dctx, tracker.species, rng, own_ids=tracker.own_ids)
-                g.determinize(specs, rng.getrandbits(32) if rng.random() < 0.7 else -1)
+                specs = D.sample_determinization(v, dctx, rng)
+                g.determinize(specs, D.hidden_counters(v), rng.getrandbits(32) if rng.random() < 0.7 else -1)
                 o.rebase(g, forced)
                 m.rebase(g, forced)
                 rebased_forced += forced
                 if rng.random() < 0.5:
                     m = N.ObsMemory.from_python(o)
-            search.set_rng(g, rng.getrandbits(32))
+            search.redraw_turn(g, rng.getrandbits(32))
             roots += 1
             if rng.random() < 0.5:                  # observe at the root itself: the cached (true) view
                 args = (g, forced, g.unusable_moves(0), g.can_switch(0))

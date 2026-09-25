@@ -38,6 +38,10 @@ enum {
     GEN3_FACTORY_RUN_OVER = 4,   // lost: the streak is over
 };
 
+// The attendant's hint when there is none (before Noland's battle): no type, no style
+#define GEN3_FACTORY_NO_HINT_TYPE 18     // NUMBER_OF_MON_TYPES
+#define GEN3_FACTORY_NO_HINT_STYLE 0     // FACTORY_STYLE_NONE
+
 struct Gen3FactoryState {
     uint8_t phase;
     uint8_t lvlMode;
@@ -56,6 +60,7 @@ void Gen3_RunFrame(void);
 size_t Gen3_StateSize(void);
 void Gen3_SaveState(void *dst);
 void Gen3_LoadState(const void *src);
+long Gen3_StateOffset(uint32_t gbaAddress, int deref);   // tests / debugging (-1: outside the state)
 struct Gen3HostState *Gen3_Host(void);
 
 void Gen3_SetBattleParams(uint32_t battleTypeFlags, uint16_t trainerA);
@@ -75,7 +80,9 @@ uint8_t Gen3_UnusableMoves(uint8_t battler);
 uint8_t Gen3_CanSwitch(uint8_t battler);
 uint16_t Gen3_ChoicedMove(uint8_t battler);    // gBattleStruct->choicedMove (Choice Band lock)       // voluntary switch allowed (not trapped)   // bitmask of move slots the game refuses
 void Gen3_ChooseSwitch(uint8_t partyIndex);
-void Gen3_Forfeit(void);                 // RUN, then "forfeit?" YES: loses the battle
+int Gen3_MoveSlotValid(uint8_t slot);            // the player's active Pokemon has a move in this slot
+int Gen3_SwitchTargetValid(uint8_t partyIndex);  // party 0-2, a Pokemon, not fainted, not the active one
+void Gen3_Forfeit(void);                // RUN, then "forfeit?" YES: loses the battle
 void Gen3_DebugDump(void);
 
 // Battle Factory run (src/gen3/factory_run.c)

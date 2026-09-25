@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pybattle.backend import SimBackend  # noqa: E402
 from pybattle.emu.decode import SYMBOLS as S, decode_party  # noqa: E402
 from pybattle.pybattle_native import Gen3Game, MctsTree  # noqa: E402
+from rl import determinize as DET  # noqa: E402
 
 D = Gen3Game.Decision
 
@@ -60,18 +61,18 @@ def bench_sim_step(n_battles=300):
 def bench_determinize(n=5000):
     base = start(1)
     rng = random.Random(0)
-    specs = [[(s, rng.randrange(372, 882), 3, rng.randrange(2), rng.choice([-1.0, 0.5])) for s in range(3)]
-             for _ in range(64)]
+    specs = [[DET.set_spec(s, rng.randrange(372, 882), 3, rng.randrange(2), rng.choice([-1.0, 0.5]))
+              for s in range(3)] for _ in range(64)]
     games = [base.clone() for _ in range(64)]
     t0 = time.perf_counter()
     for i in range(n):
-        games[i % 64].determinize(specs[i % 64], i)
+        games[i % 64].determinize(specs[i % 64], None, i)
     dt = time.perf_counter() - t0
     print(f"determinize: {dt / n * 1e6:7.1f} us  (3 slots, incl. game swap-in)")
     g = base.clone()
     t0 = time.perf_counter()
     for i in range(n):
-        g.determinize(specs[i % 64], i)
+        g.determinize(specs[i % 64], None, i)
     print(f"determinize: {(time.perf_counter() - t0) / n * 1e6:7.1f} us  (3 slots, same game)")
 
 

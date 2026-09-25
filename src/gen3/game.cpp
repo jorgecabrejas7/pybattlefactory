@@ -31,12 +31,14 @@ Gen3Game::Gen3Game() : m_state(pristineState()) {}
 Gen3Game::Gen3Game(const Gen3Game& other) {
     if (s_live == &other) Gen3_SaveState(const_cast<uint8_t*>(other.m_state.data()));
     m_state = other.m_state;
+    m_determinized = other.m_determinized;
 }
 
 Gen3Game& Gen3Game::operator=(const Gen3Game& other) {
     if (this != &other) {
         if (s_live == &other) Gen3_SaveState(const_cast<uint8_t*>(other.m_state.data()));
         m_state = other.m_state;
+        m_determinized = other.m_determinized;
         if (s_live == this) Gen3_LoadState(m_state.data());
     }
     return *this;
@@ -97,23 +99,40 @@ int Gen3Game::run(uint32_t maxFrames) {
     return Gen3_RunUntilDecision(maxFrames);
 }
 
-void Gen3Game::chooseMove(uint8_t slot) {
+void Gen3Game::chooseMove(int slot) {
     activate();
     if (Gen3_Host()->pendingDecision != ACTION) throw std::runtime_error("not at an action decision");
-    Gen3_ChooseMove(slot);
+    if (slot < 0 || slot > 3) throw std::out_of_range("move slot must be 0-3");
+    if (!Gen3_MoveSlotValid(static_cast<uint8_t>(slot))) throw std::invalid_argument("no move in that slot");
+    Gen3_ChooseMove(static_cast<uint8_t>(slot));
 }
 
-void Gen3Game::chooseSwitch(uint8_t partyIndex) {
+void Gen3Game::chooseSwitch(int partyIndex) {
     activate();
     int pending = Gen3_Host()->pendingDecision;
     if (pending != ACTION && pending != SWITCH) throw std::runtime_error("not at a decision");
+    if (partyIndex < 0 || partyIndex > 2) throw std::out_of_range("party index must be 0-2");
+    if (!Gen3_SwitchTargetValid(static_cast<uint8_t>(partyIndex)))
+        throw std::invalid_argument("not a switch target (empty, fainted or already out)");
     if (pending == ACTION && !Gen3_CanSwitch(0)) throw std::runtime_error("cannot switch: trapped");
-    Gen3_ChooseSwitch(partyIndex);
+    Gen3_ChooseSwitch(static_cast<uint8_t>(partyIndex));
 }
 
-uint8_t Gen3Game::unusableMoves(uint8_t battler) {
+namespace {
+uint8_t checkBattler(int battler) {
+    if (battler < 0 || battler > 1) throw std::out_of_range("battler must be 0 (player) or 1 (opponent)");
+    return static_cast<uint8_t>(battler);
+}
+uint8_t checkRental(int i) {
+    if (i < 0 || i > 5) throw std::out_of_range("rental index must be 0-5");
+    return static_cast<uint8_t>(i);
+}
+}  // namespace
+
+uint8_t Gen3Game::unusableMoves(int battler) {
+    uint8_t b = checkBattler(battler);
     activate();
-    return Gen3_UnusableMoves(battler);
+    return Gen3_UnusableMoves(b);
 }
 
 void Gen3Game::forfeit() {
@@ -122,14 +141,16 @@ void Gen3Game::forfeit() {
     Gen3_Forfeit();
 }
 
-bool Gen3Game::canSwitch(uint8_t battler) {
+bool Gen3Game::canSwitch(int battler) {
+    uint8_t b = checkBattler(battler);
     activate();
-    return Gen3_CanSwitch(battler) != 0;
+    return Gen3_CanSwitch(b) != 0;
 }
 
-uint16_t Gen3Game::choicedMove(uint8_t battler) {
+uint16_t Gen3Game::choicedMove(int battler) {
+    uint8_t b = checkBattler(battler);
     activate();
-    return Gen3_ChoicedMove(battler);
+    return Gen3_ChoicedMove(b);
 }
 
 uint32_t Gen3Game::rng() {
@@ -154,26 +175,31 @@ int Gen3Game::factoryPhase() {
     return Gen3Factory_Phase();
 }
 
-std::string Gen3Game::factoryRental(uint8_t i) {
+std::string Gen3Game::factoryRental(int i) {
+    uint8_t k = checkRental(i);
     activate();
     std::string out(100, '\0');
-    Gen3Factory_ReadRental(i, out.data());
+    Gen3Factory_ReadRental(k, out.data());
     return out;
 }
 
-uint16_t Gen3Game::factoryRentalMonId(uint8_t i) {
+uint16_t Gen3Game::factoryRentalMonId(int i) {
+    uint8_t k = checkRental(i);
     activate();
-    return Gen3Factory_RentalFrontierMonId(i);
+    return Gen3Factory_RentalFrontierMonId(k);
 }
 
-bool Gen3Game::factoryRent(uint8_t a, uint8_t b, uint8_t c) {
+bool Gen3Game::factoryRent(int a, int b, int c) {
+    uint8_t x = checkRental(a), y = checkRental(b), z = checkRental(c);
     activate();
-    return Gen3Factory_Rent(a, b, c) != 0;
+    return Gen3Factory_Rent(x, y, z) != 0;
 }
 
 bool Gen3Game::factorySwap(int playerSlot, int enemySlot) {
+    if (playerSlot > 2 || (playerSlot >= 0 && (enemySlot < 0 || enemySlot > 2)))
+        throw std::out_of_range("swap: player slot must be 0-2 (or < 0 to keep), enemy slot 0-2");
     activate();
-    return Gen3Factory_Swap(playerSlot, enemySlot) != 0;
+    return Gen3Factory_Swap(playerSlot < 0 ? -1 : playerSlot, enemySlot) != 0;
 }
 
 int Gen3Game::factoryRunBattle(uint32_t maxFrames) {
@@ -206,11 +232,9 @@ std::pair<int, int> Gen3Game::simStep(int kind, int index) {
     activate();
     if (Gen3_BattleOutcome() != 0) throw std::runtime_error("battle is over");
     if (kind == 0) {
-        if (index < 0 || index > 3) throw std::out_of_range("move slot");
-        chooseMove(static_cast<uint8_t>(index));
+        chooseMove(index);
     } else if (kind == 1) {
-        if (index < 0 || index > 5) throw std::out_of_range("party index");
-        chooseSwitch(static_cast<uint8_t>(index));
+        chooseSwitch(index);
     } else {
         throw std::invalid_argument("kind must be 0 (move) or 1 (switch)");
     }
@@ -229,13 +253,55 @@ int Gen3Game::battleOutcome() {
     return Gen3_BattleOutcome();
 }
 
-void Gen3Game::determinize(const std::vector<DetSlot>& slots, int64_t hiddenSeed) {
+bool Gen3Game::determinize(const std::vector<DetMon>& mons, const DetHidden* hidden, int64_t hiddenSeed) {
+    std::vector<Gen3DetMon> c;
+    c.reserve(mons.size());
+    for (const DetMon& m : mons) {
+        Gen3DetMon d{};
+        d.partySlot = m.partySlot;
+        d.species = m.species;
+        for (int i = 0; i < 4; i++) d.moves[i] = m.moves[i];
+        d.item = m.item;
+        for (int i = 0; i < 6; i++) {
+            d.ivs[i] = m.ivs[i];
+            d.evs[i] = m.evs[i];
+        }
+        d.nature = m.nature;
+        d.abilityBit = m.abilityBit;
+        d.hpFraction = m.hpFraction;
+        c.push_back(d);
+    }
+    Gen3DetHidden h{};
+    if (hidden) {
+        for (int s = 0; s < 2; s++) {
+            for (int i = 0; i < 3; i++) h.sleepElapsed[s][i] = hidden->sleepElapsed[s][i];
+            h.confusionElapsed[s] = hidden->confusionElapsed[s];
+            h.wrapElapsed[s] = hidden->wrapElapsed[s];
+            h.uproarElapsed[s] = hidden->uproarElapsed[s];
+            h.rampageElapsed[s] = hidden->rampageElapsed[s];
+        }
+    }
     activate();
-    std::vector<Gen3DetSlot> c;
-    c.reserve(slots.size());
-    for (const DetSlot& s : slots) c.push_back({s.partySlot, s.setId, s.iv, s.abilityBit, s.hpFraction});
-    if (Gen3Search_Determinize(c.data(), static_cast<int>(c.size()), hiddenSeed) != 0)
-        throw std::invalid_argument("bad determinization spec");
+    int r = Gen3Search_Determinize(c.data(), static_cast<int>(c.size()), hidden ? &h : nullptr, hiddenSeed);
+    if (r < 0) throw std::invalid_argument("bad determinization spec");
+    if (r == 1) m_determinized = true;
+    return r == 1;
+}
+
+std::string Gen3Game::stateBytes() {
+    activate();
+    Gen3_SaveState(m_state.data());
+    return std::string(m_state.begin(), m_state.end());
+}
+
+long Gen3Game::stateOffset(uint32_t gbaAddress, bool deref) {
+    activate();
+    return Gen3_StateOffset(gbaAddress, deref ? 1 : 0);
+}
+
+void Gen3Game::redrawTurn(uint32_t seed) {
+    activate();
+    Gen3Search_RedrawTurn(seed);
 }
 
 }  // namespace pkmn

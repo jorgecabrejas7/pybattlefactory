@@ -8,6 +8,9 @@
 
 #include "gen3_search.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 #include <string>
@@ -107,6 +110,19 @@ struct Searcher {
                     const std::vector<bool>& rootLegal, float rootValue, const py::function& evaluator) {
         if (rootPriors.size() != 7 || rootLegal.size() != 7)
             throw std::invalid_argument("root priors and legal need 7 entries");
+        // No true hidden information in training (rl/search.py mark_training): every root must be a full
+        // determinization (Gen3Game.determinize), whoever built the roots.
+        const char* training = std::getenv("PYB_TRAINING");
+        if (training && *training) {
+            for (const py::handle& item : roots) {
+                py::tuple t = py::reinterpret_borrow<py::tuple>(item);
+                if (t.size() < 1 || !t[0].cast<Gen3Game&>().determinized()) {
+                    PyErr_SetString(PyExc_PermissionError,
+                                    "search roots with the true hidden state are never allowed in training");
+                    throw py::error_already_set();
+                }
+            }
+        }
         EncodeCtx c = ctxFrom(ctx);
         py::object pyCtx = py::isinstance<py::dict>(ctx) ? py::object(ctx) : py::object(ctxDict(c));
         py::object encodeFn;
@@ -146,6 +162,11 @@ struct Searcher {
                 throw std::runtime_error("evaluator: priors must be [B, 7] and values [B]");
             std::memcpy(pri, p.data(), sizeof(float) * n * 7);
             std::memcpy(val, v.data(), sizeof(float) * n);
+            // one NaN value would poison every Q on its path (and the root's): fail loudly instead
+            for (int i = 0; i < n; i++) {
+                if (!std::isfinite(val[i])) throw std::runtime_error("evaluator returned a non-finite value");
+                val[i] = std::min(1.0f, std::max(0.0f, val[i]));
+            }
         };
         SearchStats st = runSearch(rs, c, rp, rl, rootValue, cfg, ev);
         py::dict out;

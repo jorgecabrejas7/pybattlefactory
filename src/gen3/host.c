@@ -60,6 +60,7 @@ void Gen3_LoadState(const void *src)
     memcpy(__start_gen3_ram, src, Gen3_StateSize());
 }
 
+
 // Writes to GBA hardware (VRAM, OAM, palettes, IO registers) land here and are ignored.
 unsigned char gGen3FakeHardware[0x80000] __attribute__((aligned(16)));
 
@@ -90,6 +91,28 @@ extern const u32 gGen3RomScriptsSize;
 struct Gen3RamSymbol { u32 gbaAddress; u32 size; void *host; };
 extern const struct Gen3RamSymbol gGen3RamSymbols[];
 extern const u32 gGen3RamSymbolsCount;
+
+// Tests / debugging: where a GBA RAM symbol (or the object a pointer symbol points to) lives inside
+// the state, as an offset from its start; -1 if outside.
+long Gen3_StateOffset(u32 gbaAddress, int deref)
+{
+    u8 *p = NULL;
+    u32 i;
+    for (i = 0; i < gGen3RamSymbolsCount; i++)
+    {
+        const struct Gen3RamSymbol *s = &gGen3RamSymbols[i];
+        if (gbaAddress - s->gbaAddress < s->size)
+        {
+            p = (u8 *)s->host + (gbaAddress - s->gbaAddress);
+            break;
+        }
+    }
+    if (p && deref)
+        p = *(u8 **)p;
+    if (p < __start_gen3_ram || p >= __stop_gen3_ram)
+        return -1;
+    return (long)(p - __start_gen3_ram);
+}
 
 void *Gen3_ResolveAddress(u32 addr)
 {
@@ -746,6 +769,19 @@ bool8 Gen3_CanSwitch(u8 battler)
             return FALSE;
     }
     return TRUE;
+}
+
+int Gen3_MoveSlotValid(u8 slot)
+{
+    return slot < MAX_MON_MOVES && gBattleMons[0].moves[slot] != MOVE_NONE;
+}
+
+int Gen3_SwitchTargetValid(u8 partyIndex)
+{
+    return partyIndex < 3
+        && GetMonData(&gPlayerParty[partyIndex], MON_DATA_SPECIES) != SPECIES_NONE
+        && GetMonData(&gPlayerParty[partyIndex], MON_DATA_HP) != 0
+        && partyIndex != gBattlerPartyIndexes[0];
 }
 
 void Gen3_ChooseMove(u8 slot)

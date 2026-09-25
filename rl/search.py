@@ -5,13 +5,18 @@
     battler.last_stats                        # visits, Q, priors, ms of the decision
 
 K determinizations, each a deterministic tree over our decisions in this battle:
-    legal    the opponent's hidden information (unseen Pokemon, sets, abilities, exact HP inside the HP bar,
-             hidden counters) is sampled from what the player knows (rl/determinize.py -> Gen3Game.determinize),
-             redrawn if it would change what the player can do now (e.g. a trapping ability drawn while the
-             view allows switching), the observer is rebased on it (BattleObserver.rebase), and the RNG gets a
-             fresh seed;
-    perfect  the true state with a fresh RNG seed. A ceiling for evaluation only: it needs allow_perfect=True and is
-             refused inside training (mark_training(), called by rl/train.py and rl/train_rainbow.py).
+    legal    the opponent's hidden information (unseen Pokemon, moves, items, abilities, IVs, EVs, natures, exact
+             HP inside the HP bar, hidden counters) is sampled from what a player knows, never from the Factory's
+             set list or the true state (rl/determinize.py -> Gen3Game.determinize), redrawn if it would change
+             what the player can do now (e.g. a trapping ability drawn while the view allows switching), and the
+             observer is rebased on it (BattleObserver.rebase);
+    perfect  the true state. A ceiling for evaluation only: it needs allow_perfect=True and is refused inside
+             training (mark_training(), called by rl/train.py and rl/train_rainbow.py), by the SearchBattler (its
+             mode cannot be changed after construction) and by the C++ Searcher (in training, every root must
+             be a full determinization: Gen3Game.determinized).
+Both modes then redraw the random state of the turn (Gen3Game.redraw_turn): a fresh RNG seed, this turn's Quick Claw
+roll, and the opponent's choice for this turn, which its AI makes while the player decides and which the root must
+not know: the opponent's AI chooses again in each root.
 Each node holds a cloned Gen3Game at a player decision and a BattleObserver advanced along its path (fast_copy +
 observe), so a leaf's observation is exactly what a player would see there. Leaves are evaluated in batches by
 FactoryNet.battler: masked softmax priors, and the critic's value denormalized with the checkpoint's value_norm
@@ -67,6 +72,7 @@ MAX_DECISIONS = 300                     # FactoryEnv.max_decisions
 HAS_SIM_STEP = hasattr(Gen3Game, "sim_step")
 HAS_SET_RNG = hasattr(Gen3Game, "set_rng")
 HAS_DETERMINIZE = hasattr(Gen3Game, "determinize")
+HAS_REDRAW_TURN = hasattr(Gen3Game, "redraw_turn")
 _OUTCOME = S.addr("gBattleOutcome")
 _RNG = S.addr("gRngValue")
 
@@ -108,6 +114,14 @@ def set_rng(game, seed: int):
         game.set_rng(seed & 0xFFFFFFFF)
     else:
         game.write(_RNG, (seed & 0xFFFFFFFF).to_bytes(4, "little"))
+
+
+def redraw_turn(game, seed: int):
+    """A root's fresh random turn: RNG seed, this turn's Quick Claw roll and the opponent's choice for this turn
+    (made by its AI while the player decides) redrawn. Every search root goes through it."""
+    if not HAS_REDRAW_TURN:
+        raise RuntimeError("search needs Gen3Game.redraw_turn (rebuild the extension)")
+    game.redraw_turn(seed & 0xFFFFFFFF)
 
 
 # ---- a pure-Python PUCT tree with the native MctsTree's interface ------------------------------------------------
@@ -267,6 +281,9 @@ class SearchBattler:
         if impl == "cpp" and observer == "cpp" and NativeObsMemory is None:
             raise RuntimeError("observer='cpp' needs pybattle_native.ObsMemory (rebuild the extension)")
         self.impl, self.observer = impl, observer if impl == "cpp" else "python"
+        self._mode = mode
+        if observer == "cpp" and impl == "cpp" and policy is not None and getattr(policy, "encode_version", 3) != 3:
+            raise ValueError("the C++ observer encodes version 3 only: use observer='python' for this checkpoint")
         self._evaluator = evaluator
         self.policy = policy
         self.net = getattr(policy, "net", None)
@@ -274,14 +291,20 @@ class SearchBattler:
         norm = (getattr(policy, "value_norm", None) or {}).get("battler")
         self.v_mean, self.v_std = (norm["mean"], max(norm["var"], 1e-4) ** 0.5) if norm else (0.0, 1.0)
         self.n_sims, self.K, self.c_puct, self.batch = n_sims, n_determinizations, c_puct, batch
-        self.mode, self.max_decisions = mode, max_decisions
+        self.max_decisions = max_decisions
         self.rng = random.Random(seed)
         self.trees = [make_tree(c_puct, virtual_loss, native_tree) for _ in range(self.K)]
         self.searcher = NativeSearcher(n_sims, batch, c_puct, virtual_loss, max_decisions) if impl == "cpp" else None
         self.last_stats = None
         self.n_decisions, self.total_ms, self.total_leaves, self.errors, self.redrawn = 0, 0.0, 0, 0, 0
         self.redraws = 8
+        self.redraw_failed = 0          # roots whose last redraw still changed what the player can do
         self._net_calls, self._eval_ms = 0, 0.0
+
+    @property
+    def mode(self):
+        """'legal' or 'perfect', fixed at construction (the perfect-information guard checks it there)."""
+        return self._mode
 
     # --- network ---------------------------------------------------------------------------------------------
 
@@ -337,33 +360,28 @@ class SearchBattler:
             copy_obs = base.copy
         else:
             copy_obs = backend._observer.fast_copy
-        info = backend.game.factory_info
-        dctx = None
-        if self.mode == "legal":
-            ri = backend.run_info()
-            tower = int.from_bytes(backend.game.read_saveblock2(SB2_TOWER_WIN_STREAKS, 2), "little")  # singles lv50
-            dctx = {"challenge": ri.challenge_num, "battle": ri.battle_in_challenge, "brain": info.brain_status,
-                    "tower_challenge": tower // 7}
-            species = set(known.species) if known is not None else set()
-            ids = set(known.own_ids) if known is not None and known.own_ids else set(own_set_ids(backend.game))
+        if self._mode != "legal" and in_training():
+            raise PermissionError("perfect-information search is never allowed in training")
+        hidden = DET.hidden_counters(view) if self._mode == "legal" else None
         truth = (backend.game.unusable_moves(0), backend.game.can_switch(0))
         for _ in range(self.K):
             obs = copy_obs()
-            if self.mode == "legal":
+            if self._mode == "legal":
                 # what the player can do now is visible (the game refuses a trapped switch / a disabled move):
                 # redraw determinizations that would change it (e.g. a Shadow Tag / Arena Trap ability drawn)
                 for attempt in range(self.redraws):
                     g = backend.game.clone()
-                    specs = DET.sample_determinization(view, dctx, species, self.rng, own_ids=ids,
-                                                       open_level=backend.open_level)
-                    g.determinize(specs, self.rng.getrandbits(32))
+                    specs = DET.sample_determinization(view, None, self.rng, open_level=backend.open_level)
+                    g.determinize(specs, hidden, self.rng.getrandbits(32))
                     if forced or (g.unusable_moves(0), g.can_switch(0)) == truth:
                         break
                     self.redrawn += 1
+                else:
+                    self.redraw_failed += 1
                 obs.rebase(g, forced)
             else:
                 g = backend.game.clone()
-            set_rng(g, self.rng.getrandbits(32))
+            redraw_turn(g, self.rng.getrandbits(32))
             roots.append((g, obs))
         return roots
 
@@ -371,7 +389,8 @@ class SearchBattler:
 
     def act_on(self, backend, known=None, decisions=0):
         """Search from `backend`'s current decision and return a backend action.
-        known: a determinize.ExclusionTracker fed with the rental / swap screens (else our team's species only);
+        known: ignored (kept for callers that pass an ExclusionTracker: the strict legal sampler uses no generation
+        rules of the Factory);
         decisions: decisions already taken in this battle (truncation at max_decisions)."""
         t0 = time.perf_counter()
         self._net_calls, self._eval_ms = 0, 0.0
@@ -485,6 +504,7 @@ class SearchBattler:
         self.last_stats = {"action": a, "visits": [float(x) for x in visits], "q": [float(x) for x in q],
                            "prior": [float(x) for x in prior], "value": value, "leaves": leaves, "nodes": nodes,
                            "ms": ms, "searched": leaves > 0 or nodes > 0, "errors": self.errors,
+                           "redraw_failed": self.redraw_failed,
                            "impl": self.impl, "net_calls": self._net_calls, "ms_eval": self._eval_ms,
                            "ms_cpp": ms_cpp}
         self.n_decisions += 1

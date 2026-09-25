@@ -233,7 +233,7 @@ PYBIND11_MODULE(pybattle_native, m) {
         .def("factory_begin", &Gen3Game::factoryBegin, py::arg("open_level") = true, py::arg("win_streak") = 0,
              py::arg("rents_count") = 0, py::arg("seed") = 0)
         .def_property_readonly("factory_phase", &Gen3Game::factoryPhase)
-        .def("factory_rental", [](Gen3Game& g, uint8_t i) { return py::bytes(g.factoryRental(i)); })
+        .def("factory_rental", [](Gen3Game& g, int i) { return py::bytes(g.factoryRental(i)); })
         .def("factory_rental_mon_id", &Gen3Game::factoryRentalMonId)
         .def("factory_rent", &Gen3Game::factoryRent)
         .def("factory_swap", &Gen3Game::factorySwap, py::arg("player_slot"), py::arg("enemy_slot") = 0)
@@ -248,15 +248,63 @@ PYBIND11_MODULE(pybattle_native, m) {
             "Returns (decision, gBattleOutcome).")
         .def("set_rng", &Gen3Game::setRng, py::arg("seed"))
         .def_property_readonly("battle_outcome", &Gen3Game::battleOutcome)
-        .def("determinize", [](Gen3Game& g, const std::vector<std::tuple<int, int, int, int, float>>& slots,
-                               int64_t hiddenSeed) {
-                std::vector<Gen3Game::DetSlot> v;
-                for (const auto& t : slots)
-                    v.push_back({std::get<0>(t), std::get<1>(t), std::get<2>(t), std::get<3>(t), std::get<4>(t)});
-                g.determinize(v, hiddenSeed);
-            }, py::arg("slots"), py::arg("hidden_seed"),
-            "slots: [(party_slot, frontier_set_id | -1 keep, iv, ability_bit, hp_fraction | -1 keep)]. "
-            "hidden_seed >= 0 also resamples hidden sleep/confusion counters; < 0 leaves them.");
+        .def("determinize", [](Gen3Game& g, const py::list& mons, py::object hidden, int64_t hiddenSeed) {
+                std::vector<Gen3Game::DetMon> v;
+                for (const py::handle& item : mons) {
+                    py::tuple t = py::reinterpret_borrow<py::tuple>(item);
+                    if (t.size() != 9)
+                        throw std::invalid_argument("mon spec: (slot, species, moves[4], item, ivs[6], evs[6], "
+                                                    "nature, ability_bit, hp_fraction)");
+                    Gen3Game::DetMon d{};
+                    d.partySlot = t[0].cast<int>();
+                    d.species = t[1].cast<int>();
+                    auto mv = t[2].cast<std::vector<int>>();
+                    auto iv = t[4].cast<std::vector<int>>();
+                    auto ev = t[5].cast<std::vector<int>>();
+                    if (mv.size() != 4 || iv.size() != 6 || ev.size() != 6)
+                        throw std::invalid_argument("mon spec: 4 moves, 6 IVs and 6 EVs");
+                    for (int i = 0; i < 4; i++) d.moves[i] = mv[i];
+                    d.item = t[3].cast<int>();
+                    for (int i = 0; i < 6; i++) {
+                        d.ivs[i] = iv[i];
+                        d.evs[i] = ev[i];
+                    }
+                    d.nature = t[6].cast<int>();
+                    d.abilityBit = t[7].cast<int>();
+                    d.hpFraction = t[8].cast<float>();
+                    v.push_back(d);
+                }
+                Gen3Game::DetHidden h{};
+                bool haveHidden = !hidden.is_none();
+                if (haveHidden) {
+                    auto x = hidden.cast<std::vector<int>>();
+                    if (x.size() != 14)
+                        throw std::invalid_argument("hidden: 14 ints (sleep[2][3], confusion[2], wrap[2], "
+                                                    "uproar[2], rampage[2])");
+                    for (int s = 0; s < 2; s++) {
+                        for (int i = 0; i < 3; i++) h.sleepElapsed[s][i] = x[s * 3 + i];
+                        h.confusionElapsed[s] = x[6 + s];
+                        h.wrapElapsed[s] = x[8 + s];
+                        h.uproarElapsed[s] = x[10 + s];
+                        h.rampageElapsed[s] = x[12 + s];
+                    }
+                }
+                return g.determinize(v, haveHidden ? &h : nullptr, hiddenSeed);
+            }, py::arg("mons"), py::arg("hidden") = py::none(), py::arg("hidden_seed") = -1,
+            "mons: [(party_slot, species (<= 0: keep), [4 moves], item, [6 IVs], [6 EVs], nature, ability_bit, "
+            "hp_fraction (< 0: keep))], drawn from player knowledge (rl/determinize.py). hidden: the elapsed "
+            "counts the player saw, 14 ints: sleep attempts [side][party slot], confusion attempts, wrap, uproar "
+            "and rampage turns [battler]. hidden_seed >= 0 also resamples every hidden counter; < 0 leaves them. "
+            "Returns True when every opponent slot was rebuilt or has fainted.")
+        .def("redraw_turn", &Gen3Game::redrawTurn, py::arg("seed"),
+             "A search root's fresh random turn: gRngValue = seed, this turn's Quick Claw roll redrawn, and the "
+             "opponent's choice for this turn (made by its AI while the player decides) undone so it chooses again.")
+        .def("_state_bytes", [](Gen3Game& g) { return py::bytes(g.stateBytes()); }, "tests / debugging")
+        .def("_state_offset", &Gen3Game::stateOffset, py::arg("gba_address"), py::arg("deref") = false,
+             "tests / debugging: offset in _state_bytes() of a GBA RAM symbol, or of what a pointer symbol "
+             "points to (deref); -1 outside the state")
+        .def_property_readonly("determinized", &Gen3Game::determinized,
+                               "True once a full determinization replaced the opponent's hidden data (clones too).");
 
     py::class_<MctsTree>(m, "MctsTree")
         .def(py::init<int, float, float>(), py::arg("n_actions") = 7, py::arg("c_puct") = 1.5f,

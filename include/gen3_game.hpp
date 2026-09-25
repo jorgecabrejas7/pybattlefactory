@@ -36,11 +36,13 @@ public:
 
     // Advance until the player must decide; returns a Decision.
     int run(uint32_t maxFrames = 200000);
-    void chooseMove(uint8_t slot);
-    uint8_t unusableMoves(uint8_t battler = 0);   // CheckMoveLimitations bitmask
-    bool canSwitch(uint8_t battler = 0);
-    uint16_t choicedMove(uint8_t battler = 0);          // not trapped (Mean Look, wrap, Ingrain, Shadow Tag...)
-    void chooseSwitch(uint8_t partyIndex);
+    // Indices are checked: std::out_of_range for a slot / party index / battler outside its range,
+    // std::invalid_argument for an empty move slot or a party Pokemon that cannot come in.
+    void chooseMove(int slot);
+    uint8_t unusableMoves(int battler = 0);   // CheckMoveLimitations bitmask
+    bool canSwitch(int battler = 0);          // not trapped (Mean Look, wrap, Ingrain, Shadow Tag...)
+    uint16_t choicedMove(int battler = 0);    // Choice Band lock
+    void chooseSwitch(int partyIndex);
     void forfeit();
 
     uint32_t rng();
@@ -52,9 +54,9 @@ public:
     enum FactoryPhase { F_NONE = 0, F_RENTAL = 1, F_BATTLE = 2, F_SWAP = 3, F_RUN_OVER = 4 };
     void factoryBegin(bool openLevel, uint16_t winStreak, uint16_t rentsCount, uint32_t seed);
     int factoryPhase();
-    std::string factoryRental(uint8_t i);        // struct Pokemon (game format)
-    uint16_t factoryRentalMonId(uint8_t i);      // gBattleFrontierMons index
-    bool factoryRent(uint8_t a, uint8_t b, uint8_t c);
+    std::string factoryRental(int i);        // struct Pokemon (game format)
+    uint16_t factoryRentalMonId(int i);      // gBattleFrontierMons index
+    bool factoryRent(int a, int b, int c);   // false (nothing changed) for repeated slots / species
     bool factorySwap(int playerSlot, int enemySlot);   // playerSlot < 0: keep
     int factoryRunBattle(uint32_t maxFrames = 400000); // Decision; BATTLE_OVER advances the run
     struct FactoryInfo {
@@ -69,8 +71,30 @@ public:
     std::pair<int, int> simStep(int kind, int index);
     void setRng(uint32_t value);
     int battleOutcome();
-    struct DetSlot { int partySlot, setId, iv, abilityBit; float hpFraction; };
-    void determinize(const std::vector<DetSlot>& slots, int64_t hiddenSeed);
+    // One opponent slot drawn from player knowledge (rl/determinize.py). species <= 0: keep the slot.
+    struct DetMon {
+        int partySlot, species;
+        int moves[4];
+        int item;
+        int ivs[6], evs[6];     // HP Atk Def Spe SpA SpD
+        int nature, abilityBit;
+        float hpFraction;
+    };
+    // Elapsed counts the player saw (see Gen3DetHidden in src/gen3/search_host.h)
+    struct DetHidden {
+        int sleepElapsed[2][3];
+        int confusionElapsed[2], wrapElapsed[2], uproarElapsed[2], rampageElapsed[2];
+    };
+    // Returns true when every opponent slot was rebuilt or has fainted (a full determinization).
+    bool determinize(const std::vector<DetMon>& mons, const DetHidden* hidden, int64_t hiddenSeed);
+    // A search root's fresh random turn: RNG seed, Quick Claw roll, the opponent's AI choice redone.
+    void redrawTurn(uint32_t seed);
+    // Set by a full determinization, inherited by clones: no true hidden opponent data is left.
+    bool determinized() const { return m_determinized; }
+
+    // Tests / debugging: the whole state, and where a GBA symbol (or what a pointer symbol points to) is in it.
+    std::string stateBytes();
+    long stateOffset(uint32_t gbaAddress, bool deref);
 
     // Make this game's state the live battle RAM (for direct readers such as the C++ observer).
     void makeLive() { activate(); }
@@ -78,6 +102,7 @@ public:
 private:
     void activate();
     std::vector<uint8_t> m_state;
+    bool m_determinized = false;
 };
 
 }  // namespace pkmn
