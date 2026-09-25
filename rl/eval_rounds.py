@@ -184,9 +184,10 @@ def _worker(args):
 
 
 def eval_round_inprocess(ckpt, k, n_runs, battler="net", search_kw=None, workers=4, envs_per_worker=8, seed=777,
-                         procs=1, device="cpu", threads=1, server=None):
+                         procs=1, device="cpu", threads=1, server=None, slot0=0):
     """eval_round with a battler that sees the backend. Returns complete / battle / n / ms_per_decision.
-    server: an rl.inference.InferenceServer with >= procs client slots (the battler's network on the GPU)."""
+    server: an rl.inference.InferenceServer with >= slot0 + procs client slots (the battler's network on the GPU;
+    worker p uses slot slot0 + p)."""
     import multiprocessing as mp
     global _SERVER
     n_env = workers * envs_per_worker
@@ -195,9 +196,9 @@ def eval_round_inprocess(ckpt, k, n_runs, battler="net", search_kw=None, workers
     target = int(np.ceil(n_runs / n_env))
     kw = dict(search_kw or {})
     jobs = [(ckpt, device, battler, dict(kw, seed=kw.get("seed", 0) + 7919 * p + 104729 * k), k, seeds[p::procs],
-             target, threads, p) for p in range(procs)]
-    if server is not None and server.n_clients < procs:
-        raise ValueError(f"the inference server has {server.n_clients} client slots, {procs} workers")
+             target, threads, slot0 + p) for p in range(procs)]
+    if server is not None and server.n_clients < slot0 + procs:
+        raise ValueError(f"the inference server has {server.n_clients} client slots, {slot0 + procs} needed")
     _SERVER = server
     try:
         if procs == 1:

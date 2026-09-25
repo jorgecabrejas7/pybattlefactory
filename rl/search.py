@@ -11,7 +11,8 @@ K determinizations, each a deterministic tree over our decisions in this battle:
              what the player can do now (e.g. a trapping ability drawn while the view allows switching), and the
              observer is rebased on it (BattleObserver.rebase);
     perfect  the true state. A ceiling for evaluation only: it needs allow_perfect=True and is refused inside
-             training (mark_training(), called by rl/train.py and rl/train_rainbow.py), by the SearchBattler (its
+             training (mark_training(), called by rl/train.py, rl/train_rainbow.py and rl/alphazero.py), by the
+             SearchBattler (its
              mode cannot be changed after construction) and by the C++ Searcher (in training, every root must
              be a full determinization: Gen3Game.determinized).
 Both modes then redraw the random state of the turn (Gen3Game.redraw_turn): a fresh RNG seed, this turn's Quick Claw
@@ -78,7 +79,7 @@ _RNG = S.addr("gRngValue")
 
 # ---- the perfect-information guard ----------------------------------------------------------------------------
 TRAINING_ENV = "PYB_TRAINING"
-_TRAINING_MAINS = ("rl.train", "rl.train_rainbow")
+_TRAINING_MAINS = ("rl.train", "rl.train_rainbow", "rl.alphazero")
 
 
 def mark_training():

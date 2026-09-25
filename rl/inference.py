@@ -52,6 +52,9 @@ _ERR = 1024                     # bytes of error message
 _CTL = 8                        # float64 control block: closed flag, batches, samples, forward seconds, ...
 
 
+FACTORYNET_ALGOS = ("ppo", "alphazero")      # checkpoints whose network is FactoryNet
+
+
 class ServerDied(RuntimeError):
     pass
 
@@ -113,8 +116,8 @@ class LocalEvaluator:
     """The battler network in this process (any device): the same callable interface as InferenceClient."""
 
     def __init__(self, policy, precision="fp32"):
-        if getattr(policy, "algo", "ppo") != "ppo":
-            raise ValueError("the battler evaluator needs a PPO (FactoryNet) checkpoint")
+        if getattr(policy, "algo", "ppo") not in FACTORYNET_ALGOS:
+            raise ValueError("the battler evaluator needs a FactoryNet (PPO or AlphaZero) checkpoint")
         self.policy, self.net, self.device = policy, policy.net, policy.device
         self.v_mean, self.v_std = value_affine(policy)
         self.precision = precision
@@ -294,8 +297,8 @@ class InferenceServer:
         if max_total < max_batch:
             raise ValueError("max_total must be >= max_batch")
         args = torch.load(ckpt, map_location="cpu")["args"]
-        if args.get("algo", "ppo") != "ppo":
-            raise ValueError("the inference server serves PPO (FactoryNet) checkpoints")
+        if args.get("algo", "ppo") not in FACTORYNET_ALGOS:
+            raise ValueError("the inference server serves FactoryNet (PPO / AlphaZero) checkpoints")
         self.ckpt, self.n_clients, self.max_batch, self.max_total = str(ckpt), n_clients, max_batch, max_total
         self.deadline_ms, self.precision, self.device = deadline_ms, precision, str(device)
         self.timeout, self.poll = timeout, poll
@@ -315,6 +318,7 @@ class InferenceServer:
             self._req = ctx.Semaphore(0)
             self._resps = [ctx.Semaphore(0) for _ in range(n_clients)]
             self._stop = ctx.Event()
+            self._ctrl, ctrl_child = ctx.Pipe()                 # reload(): new weights between batches
             recv, send = ctx.Pipe(duplex=False)
             cfg = dict(ckpt=self.ckpt, max_batch=max_batch, max_total=max_total, deadline_ms=deadline_ms,
                        precision=precision, device=self.device, threads=threads, owner=self._owner,
@@ -322,7 +326,7 @@ class InferenceServer:
                        layout={k: (s, np.dtype(d).str) for k, (s, d) in self.layout.items()})
             self._proc = ctx.Process(target=_serve, name="inference-server", daemon=True,
                                      args=(cfg, [s.name for s in self._shms], self._ctl_shm.name, self._req,
-                                           self._resps, self._stop, send))
+                                           self._resps, self._stop, send, ctrl_child))
             self._proc.start()
             send.close()
             self.pid = self._proc.pid
@@ -341,6 +345,22 @@ class InferenceServer:
         except BaseException:
             self.close()
             raise
+
+    def reload(self, ckpt, timeout=120.0):
+        """Load another checkpoint's weights and value normalization into the running server (same architecture
+        and encoding). The weights are copied in place, so the captured CUDA graphs stay valid; the requests
+        answered after this returns use the new network (it happens between two forward passes)."""
+        if self._closed:
+            raise ServerDied("the server was closed")
+        self._ctrl.send(("reload", str(ckpt)))
+        self._req.release()                                 # wake the server if it waits for requests
+        if not self._ctrl.poll(timeout):
+            raise TimeoutError("the inference server did not reload in time")
+        status, info = self._ctrl.recv()
+        if status != "ok":
+            raise RuntimeError(f"the inference server could not reload {ckpt}:\n{info}")
+        self.ckpt = str(ckpt)
+        return info
 
     def client(self, i):
         if not 0 <= i < self.n_clients:
@@ -398,7 +418,7 @@ class InferenceServer:
 
 # ---- server process ---------------------------------------------------------------------------------------------------
 
-def _serve(cfg, shm_names, ctl_name, req, resps, stop, conn):
+def _serve(cfg, shm_names, ctl_name, req, resps, stop, conn, ctrl=None):
     from multiprocessing import shared_memory
     shms, slots = [], []
     try:
@@ -410,7 +430,8 @@ def _serve(cfg, shm_names, ctl_name, req, resps, stop, conn):
             torch.backends.cudnn.allow_tf32 = False
         policy = Policy(cfg["ckpt"], device)
         net = policy.net
-        v_mean, v_std = value_affine(policy)
+        # (0-dim tensors, not Python floats: a CUDA graph reads them at replay, so reload() can change them)
+        v_mean, v_std = (torch.tensor(x, dtype=torch.float32, device=device) for x in value_affine(policy))
         lay = {k: (tuple(s), np.dtype(d)) for k, (s, d) in cfg["layout"].items()}
         for name in shm_names + [ctl_name]:
             # (attaching registers the name with the resource tracker this process shares with the owner: a
@@ -501,8 +522,27 @@ def _serve(cfg, shm_names, ctl_name, req, resps, stop, conn):
     def scan():
         return [i for i, s in enumerate(slots) if s.hdr[0] == PENDING]
 
+    def reload(path):
+        ck = torch.load(path, map_location=device)
+        net.load_state_dict(ck["net"])                  # in place: the graphs' parameter buffers are kept
+        policy.value_norm = ck.get("value_norm") or {}
+        m, s = value_affine(policy)
+        v_mean.fill_(m)
+        v_std.fill_(s)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+
     try:
         while not stop.is_set():
+            if ctrl is not None and ctrl.poll():
+                cmd, arg = ctrl.recv()
+                try:
+                    if cmd != "reload":
+                        raise ValueError(f"unknown command {cmd!r}")
+                    reload(arg)
+                    ctrl.send(("ok", {"ckpt": arg}))
+                except Exception:
+                    ctrl.send(("error", traceback.format_exc()))
             pending = scan()
             if not pending:
                 if not req.acquire(timeout=0.2):

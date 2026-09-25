@@ -2,9 +2,14 @@
 comparable at equal training steps.
 
     python -m rl.full_report --main runs/ppo_joint_v3 --others runs/ppo_joint_v1,runs/ppo_joint_v2
+    python -m rl.full_report --main runs/alphazero_v1 --others runs/ppo_joint_v3 --grid 1e6
+
+Any run whose checkpoints rl.policy.Policy loads (PPO, Rainbow, AlphaZero: ckpt_<battler steps>.pt) can be compared.
+AlphaZero makes far fewer battler decisions per hour than PPO: use a finer --grid for it.
 
 1. Per-round evaluation (runs start at round k; the only metric comparable across start distributions) for every
-   run on a common grid of battler steps (every 5 M, up to what each run reached), 384 runs per round, cached.
+   run on a common grid of battler steps (every --grid, default 5 M, up to what each run reached), 384 runs per round,
+   cached.
 2. Noland / per-position analysis (rounds 3 and 6) for the main run's latest checkpoint and the other runs at the
    same step (if they got there).
 3. Strategy analysis of the main run (rentals, swaps, battler moves).
@@ -30,7 +35,8 @@ def ckpts(run):
     return out
 
 
-def nearest(run, step, tol=0.6e6):
+def nearest(run, step, tol=None):
+    tol = 0.12 * GRID if tol is None else tol
     cs = ckpts(run)
     if not cs:
         return None
@@ -43,11 +49,14 @@ def sh(*args):
 
 
 def main():
+    global GRID
     p = argparse.ArgumentParser()
     p.add_argument("--main", required=True)
     p.add_argument("--others", default="")
     p.add_argument("--runs", type=int, default=384)
+    p.add_argument("--grid", type=float, default=GRID, help="battler steps between compared checkpoints")
     args = p.parse_args()
+    GRID = args.grid
     others = [o for o in args.others.split(",") if o]
     runs = others + [args.main]
     latest = max(ckpts(args.main))
@@ -56,7 +65,7 @@ def main():
     # 1. per-round evaluation on the common grid (each run up to where it got)
     for r in runs:
         top = max(ckpts(r))
-        steps = [g for g in grid if g <= top + 0.6e6]
+        steps = [g for g in grid if g <= top + 0.12 * GRID]
         if steps:
             sh("rl.eval_rounds", "--run", r, "--steps", ",".join(str(float(g)) for g in steps), "--runs", str(args.runs))
 
@@ -95,7 +104,7 @@ def main():
     for k in range(1, 7):
         cells = []
         for r in runs:
-            pts = [d for d in rows(r) if d["steps"] <= common + 0.6e6][-2:]
+            pts = [d for d in rows(r) if d["steps"] <= common + 0.12 * GRID][-2:]
             if pts:
                 c = np.mean([d["rounds"][str(k)]["complete"] for d in pts])
                 b = np.mean([d["rounds"][str(k)]["battle"] for d in pts])
