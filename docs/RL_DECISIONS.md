@@ -399,9 +399,11 @@ Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
   - fallos de reproducibilidad de `FactoryEnv.reset()`: la evaluación usa un entorno nuevo por racha.
 
 Pendiente (se suman a la lista de abajo):
-- **Codificación v4:**
-  - corregir los IVs rivales en `rl/damage.py` (3/6 y la regla de Noland);
-  - corregir **las especies de Hueso Grueso y Bola Luminosa** (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden
-    de los ids, así que hoy Hueso Grueso se aplica a Pikachu y Cubone, y Bola Luminosa a Marowak);
+- **Codificación v4** (decisiones del usuario, 2026-09-25):
+  - las estimaciones de daño **no usan los IVs del rival**, porque un jugador no los conoce. El IV pasa a ser
+    desconocido y los stats rivales se acotan con cualquier IV de 0 a 31, además de EVs 0–252 y naturaleza 0,9–1,1.
+    Esto sustituye a la tabla actual, que además era incorrecta;
+  - corregir las especies de los objetos: **Hueso Grueso para Cubone y Marowak, Bola Luminosa para Pikachu**
+    (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden de los ids, así que hoy se aplican al revés);
   - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
 - **Entrenar con búsqueda** (expert iteration, solo en modo legal).
