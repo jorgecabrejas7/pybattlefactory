@@ -48,7 +48,7 @@ set_target_properties(gen3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(gen3 PRIVATE GEN3_HOST)
 target_include_directories(gen3 PUBLIC include PRIVATE src)
 target_compile_options(gen3 PRIVATE
-    $<$<COMPILE_LANGUAGE:C>:-std=gnu17 -w -O2 -g -funsigned-char -fwrapv -fno-strict-aliasing>
+    $<$<COMPILE_LANGUAGE:C>:-std=gnu17 -w -O2 -g -funsigned-char -fwrapv -fno-strict-aliasing -ftrivial-auto-var-init=zero>
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/third_party/pokeemerald/include>"
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/third_party/pokeemerald/src>"
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/src>"
