@@ -1,5 +1,5 @@
 """The C++ observer + encoder (ObsMemory, include/gen3_observer.hpp) against pybattle.view.BattleObserver +
-rl.encode.battle (encoding v3), side by side on real simulator runs.
+rl.encode.battle (encodings v3 and v4, one run each), side by side on real simulator runs.
 
 Every encoded array must agree: ids exactly, floats within 1e-6. Paths covered: whole random-play Factory runs
 (rounds 1-6 through the starting win streak, Noland, forced switches), ObsMemory.from_python at arbitrary points
@@ -29,12 +29,22 @@ KEYS = ("mon_ids", "mon_num", "move_num", "ctx_ids", "ctx_num", "mask", "active"
 ACTION, SWITCH = search.ACTION, search.SWITCH
 
 
+def _use_version(v):
+    old = encode.VERSION
+    encode.set_version(v)
+    assert N.encode_version() == v                  # rl.encode.set_version switches the C++ encoder too
+    yield v
+    encode.set_version(old)
+
+
 @pytest.fixture(autouse=True)
 def _v3():
-    old = encode.VERSION
-    encode.set_version(3)
-    yield
-    encode.set_version(old)
+    yield from _use_version(3)
+
+
+@pytest.fixture(params=[3, 4], ids=["v3", "v4"])
+def version(request):
+    yield from _use_version(request.param)
 
 
 def _diff(py, cpp):
@@ -101,7 +111,7 @@ def _args(b):
     return g, b.phase == Phase.FORCED_SWITCH, g.unusable_moves(0), g.can_switch(0)
 
 
-def test_real_runs_and_from_python():
+def test_real_runs_and_from_python(version):
     """Whole runs: a C++ memory per battle from its start, plus from_python conversions at random points, each
     followed to the end of its battle."""
     rng = random.Random(0)
@@ -130,7 +140,7 @@ def test_real_runs_and_from_python():
         forced_n += forced
         noland += bool(b.game.factory_info.brain_status)
         rounds.add(ctx["challenge"])
-    print(f"\nreal runs: {st.n} encodings compared ({forced_n} forced switches, {noland} Noland decisions, "
+    print(f"\nv{version} real runs: {st.n} encodings compared ({forced_n} forced switches, {noland} Noland decisions, "
           f"rounds {sorted(rounds)}, {conv} from_python conversions); bit-exact {st.exact}, mismatches {len(st.fails)}")
     for where, d in st.fails[:10]:
         print("  ", where, d)
@@ -138,7 +148,7 @@ def test_real_runs_and_from_python():
     assert not st.fails
 
 
-def test_search_like_paths():
+def test_search_like_paths(version):
     """clone -> determinize(specs, hidden_seed) (or the true state) -> rebase -> [observe at the root] ->
     sim_step ... observe, the Python and C++ observers side by side; from_python on the rebased memory too."""
     rng = random.Random(1)
@@ -189,7 +199,7 @@ def test_search_like_paths():
                 if rng.random() < 0.15:
                     m = N.ObsMemory.from_python(o)
                     st.check("path from_python", view, ctx, m, g)
-    print(f"\nsearch-like paths: {roots} roots ({rebased_forced} rebased at a forced switch), {steps} steps, "
+    print(f"\nv{version} search-like paths: {roots} roots ({rebased_forced} rebased at a forced switch), {steps} steps, "
           f"{st.n} encodings compared; bit-exact {st.exact}, mismatches {len(st.fails)}")
     for where, d in st.fails[:10]:
         print("  ", where, d)
@@ -237,3 +247,19 @@ def test_benchmark():
     print(f"\nper leaf ({n}): python observe {us(t_po):.0f} us, encode {us(t_pe):.0f} us; "
           f"C++ (through pybind) copy+observe {us(t_co):.1f} us, encode {us(t_ce):.1f} us")
     assert t_co + t_ce < (t_po + t_pe) / 5
+
+
+def test_encode_version_switch():
+    """Layout sizes per version, and the C++ switch refuses what it cannot encode."""
+    sizes = {}
+    for v in (2, 3, 4):
+        encode.set_version(v)
+        sizes[v] = (encode.MON_NUM, encode.MOVE_NUM, encode.CTX_NUM)
+    encode.set_version(3)
+    assert sizes[3] == (106, 17, 99) and sizes[4] == (106 + encode.N_DEFEATED, 17, 99)
+    assert sizes[2][0] == 102 and sizes[2][1] == 14
+    assert N.encode_version() == 3
+    with pytest.raises(ValueError):
+        N.set_encode_version(2)
+    with pytest.raises(ValueError):
+        encode.set_version(5)

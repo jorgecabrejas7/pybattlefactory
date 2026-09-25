@@ -372,11 +372,35 @@ class RentalView:
 
 
 @dataclass
+class FoeRecord:
+    """How hard one opponent Pokemon was, as the player watched the battle (BattleObserver accumulates it over the
+    turns; docs/RL_DECISIONS.md §17). A turn is credited to the opponent Pokemon on the field during it (the one
+    that came in, when it switched in voluntarily). Our side is exact (our HP, statuses, faints); the opponent's
+    side is only what the screen showed (its HP bar, announced stat changes)."""
+    damage: int = 0                 # HP our Pokemon lost during its turns (any cause: hits, status, weather...)
+    team_max_hp: int = 0            # our team's total max HP (the scale of `damage`)
+    knockouts: int = 0              # our Pokemon that fainted during its turns
+    turns: int = 0                  # game turns it was on the field
+    hits_taken: int = 0             # turns in which our move made its HP bar drop
+    max_boosts: int = 0             # highest sum of its positive stat stages seen (Atk..Eva)
+    inflicted_status: bool = False  # one of ours got a major status during its turns (not our own Rest)
+
+    @property
+    def damage_frac(self) -> float:
+        return self.damage / self.team_max_hp if self.team_max_hp else 0.0
+
+
+def _no_records() -> List[FoeRecord]:
+    return [FoeRecord() for _ in range(3)]
+
+
+@dataclass
 class SwapView:
     own_party: List[OwnMon]
     enemy_party: List[SeenMon]      # the defeated team: species (+ what was revealed in battle)
     hint_type: int                  # next opponent
     hint_style: int
+    defeated: List[FoeRecord] = field(default_factory=_no_records)   # per defeated-team slot (zeros: unknown)
 
 
 @dataclass
@@ -568,6 +592,10 @@ class BattleObserver:
         self._events = TurnEvents()
         self._cache_key = None
         self._cache_view: Optional[BattleView] = None
+        # per enemy party slot: FoeRecord fields damage, knockouts, turns, hits_taken, max_boosts, inflicted_status
+        self._records: List[List[int]] = [[0] * 6 for _ in range(3)]
+        self._team_max_hp = 0
+        self._finished = False                      # finish() has accounted for the last turn
 
     def copy(self) -> "BattleObserver":
         return copy.deepcopy(self)
@@ -590,6 +618,7 @@ class BattleObserver:
         d["_bench_status"] = self._bench_status.copy()
         d["_sleep"] = {k: v[:] for k, v in self._sleep.items()}
         d["_vol"] = [{k: (v[:] if type(v) is list else v) for k, v in vol.items()} for vol in self._vol]
+        d["_records"] = [r[:] for r in self._records]
         return o
 
     def rebase(self, ram: RamReader, forced_switch: bool) -> None:
@@ -655,6 +684,9 @@ class BattleObserver:
         self._update_seen(s)
         self._update_reveals(a, s, ev, can_switch)
         self._update_counters(a, s, ev)
+        if new_turn_done:
+            self._record_turns(a, s, ev)
+        self._record_boosts(s)
         view = self._build(s, ev, forced_switch, unusable_moves, can_switch)
 
         if not forced_switch:
@@ -662,6 +694,23 @@ class BattleObserver:
         self._prev = s
         self._cache_key, self._cache_view = key, view
         return view
+
+    def finish(self, ram: RamReader) -> None:
+        """The battle has just been decided (gBattleOutcome set; both backends call this at that moment, before
+        the game winds the battle down): account for the turns since the last BATTLE decision in the records
+        of the opponent Pokemon. Only once per battle; observe() must not be called afterwards."""
+        a = self._start
+        if self._finished or a is None:
+            return
+        self._finished = True
+        s = _Snap(ram, False)
+        ev = self._turn_events(a, s, max(1, s.turn - a.turn))
+        self._record_turns(a, s, ev)
+        self._record_boosts(s)
+
+    def foe_records(self) -> List[FoeRecord]:
+        """What the player saw each opponent Pokemon (by enemy party slot) do in this battle (SwapView.defeated)."""
+        return [FoeRecord(r[0], self._team_max_hp, r[1], r[2], r[3], r[4], bool(r[5])) for r in self._records]
 
     def swap_candidates(self, ram: RamReader) -> List[SeenMon]:
         """The defeated team as the swap screen shows it (species) plus what the battle revealed."""
@@ -874,6 +923,43 @@ class BattleObserver:
                     heal += max(1, dealt // hold_effect(a.mons[b].item)[1])
                 h0[b] = min(max_hp[b], h0[b] + heal)
         return [(min(hit[b], h0[b]) if damaged[b] else 0, h0[b], max_hp[b]) for b in (0, 1)]
+
+    # --- per-opponent records (the tactician's measure of each defeated Pokemon) ------------
+
+    @staticmethod
+    def _own_state(s: _Snap, i: int) -> Tuple[int, int]:
+        """(HP, major status) of our party Pokemon i (the active one's battle copy is authoritative)."""
+        if i == s.idx[0]:
+            return s.mons[0].hp, major_status(s.mons[0].status1)
+        m = s.parties[0][i]
+        return m.hp, major_status(m.status)
+
+    def _record_turns(self, a: _Snap, s: _Snap, ev: TurnEvents) -> None:
+        """Credit the turns from `a` (the last BATTLE decision) to `s` to the opponent Pokemon on the field."""
+        j = s.idx[1] if ev.enemy_action == ACTION_SWITCH else a.idx[1]
+        if not 0 <= j < 3:
+            return
+        rec = self._records[j]
+        self._team_max_hp = sum(m.max_hp for m in s.parties[0][:3])
+        rested = ev.own_action == ACTION_MOVE and _is(ev.own_move, "REST")
+        for i in range(3):
+            hp0, st0 = self._own_state(a, i)
+            hp1, st1 = self._own_state(s, i)
+            rec[0] += max(0, hp0 - hp1)
+            if hp0 > 0 and hp1 == 0:
+                rec[1] += 1
+            if st0 == 0 and st1 != 0 and hp1 > 0 and not (rested and i == a.idx[0] and st1 == 1):
+                rec[5] = 1
+        rec[2] += ev.turns
+        if ev.own_action == ACTION_MOVE and ev.damage_dealt_pixels > 0:
+            rec[3] += 1
+
+    def _record_boosts(self, s: _Snap) -> None:
+        j = s.idx[1]
+        if 0 <= j < 3:
+            boosts = sum(max(0, st - 6) for st in s.mons[1].stat_stages[1:8])
+            if boosts > self._records[j][4]:
+                self._records[j][4] = boosts
 
     # --- memory updates -------------------------------------------------------------------
 

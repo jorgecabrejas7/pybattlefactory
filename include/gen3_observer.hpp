@@ -1,9 +1,11 @@
 #pragma once
 
-// The player's observer and the battle encoder (encoding v3) in C++: the equivalent of
+// The player's observer and the battle encoder (encodings v3 and v4) in C++: the equivalent of
 // pybattle/view.py BattleObserver (observe / rebase / fast_copy) followed by rl/encode.py battle()
-// with VERSION = 3, including rl/damage.py battle_estimates (with its current IV rule
-// FIXED_IVS[min(challenge, 7)][battle == 6], the one the v3 network was trained on).
+// with VERSION = 3 or 4, including rl/damage.py battle_estimates (v3: its IV rule
+// FIXED_IVS[min(challenge, 7)][battle == 6] and species quirk, the ones the v3 network was trained on;
+// v4: any IV 0-31 at the level shown, docs/RL_DECISIONS.md §17). The version is a process-wide switch,
+// set_encode_version (rl.encode.set_version calls it).
 //
 //   ObsMemory mem;  obs_init(mem, hint_type, hint_style);
 //   at every player decision of the battle, in order:  obs_observe(mem, game, forced, unusable, can_switch);
@@ -162,18 +164,29 @@ void obs_observe(ObsMemory& mem, Gen3Game& game, bool forced, uint8_t unusable_m
 // BattleObserver.rebase: the opponent's hidden state of `game` was rewritten (a determinization).
 void obs_rebase(ObsMemory& mem, Gen3Game& game, bool forced);
 
-// ---- encoding v3 (rl/encode.py) ----
+// ---- encodings v3 / v4 (rl/encode.py) ----
 struct EncodeCtx { int streak, battle, challenge, rents; };
-constexpr int MON_IDS = 19, MON_NUM = 106, MOVE_NUM = 17, CTX_IDS = 2, CTX_NUM = 99;
+// Layout sizes. MON_NUM depends on the version (v4 adds N_DEFEATED numbers per Pokemon token); the numeric arrays
+// of EncodedObs have room for the largest layout (any version, also v2 through the Python encoder) and are packed:
+// token i's numbers start at i * mon_w (move_num: (i * 4 + j) * move_w).
+constexpr int MON_IDS = 19, CTX_IDS = 2, N_DEFEATED = 6;
+constexpr int MON_NUM_V3 = 106, MON_NUM_V4 = MON_NUM_V3 + N_DEFEATED, MOVE_NUM = 17, CTX_NUM = 99;
+constexpr int MON_NUM_MAX = MON_NUM_V4, MOVE_NUM_MAX = MOVE_NUM, CTX_NUM_MAX = CTX_NUM;
 struct EncodedObs {
     int64_t mon_ids[6][MON_IDS];
-    float mon_num[6][MON_NUM];
-    float move_num[6][4][MOVE_NUM];
+    float mon_num[6 * MON_NUM_MAX];
+    float move_num[6 * 4 * MOVE_NUM_MAX];
     int64_t ctx_ids[CTX_IDS];
-    float ctx_num[CTX_NUM];
+    float ctx_num[CTX_NUM_MAX];
     bool mask[7];
     int64_t active;
+    int32_t mon_w, move_w, ctx_w;       // this observation's MON_NUM, MOVE_NUM, CTX_NUM
 };
+
+// The encoding version of encode_battle / encode_view (3 or 4; default 3). Throws std::invalid_argument otherwise.
+void set_encode_version(int version);
+int encode_version();
+int encode_mon_num(int version);        // MON_NUM of a version (3, 4)
 
 // rl.encode.battle(view, ctx) of the last observed view (`game` is not read: the view is in the memory).
 void encode_battle(const ObsMemory& mem, Gen3Game& game, const EncodeCtx& ctx, EncodedObs& out);

@@ -371,3 +371,65 @@ def test_clone_copies_observer_memory():
     if b.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
         b.act(b.view().legal_actions[0])
     assert (dict(c._observer.revealed_moves), c._observer._turns_done) == before
+
+
+# ---------------------------------------------------------------------------------------------
+# the defeated opponents' records (SwapView.defeated)
+# ---------------------------------------------------------------------------------------------
+
+def test_defeated_records_add_up_to_the_battle():
+    """At each swap, the per-opponent records account for the whole battle as the player saw it: the HP our team
+    lost adds up (exactly, when none of ours was seen healing), the knockouts are our fainted Pokemon, every
+    battle turn is credited once, the boosts are at least those seen, a status on us came from some opponent."""
+    from rl.baselines import MaxDamageBattler
+    from pybattle.view import FoeRecord, SwapView
+    swaps = exact = statuses = 0
+    for seed in range(40):
+        rng = random.Random(seed)
+        battler = MaxDamageBattler(seed)
+        b = SimBackend()
+        b.reset(seed=seed, win_streak=[0, 7, 14][seed % 3])
+        views, steps = [], 0
+        while b.phase != Phase.RUN_OVER and steps < 3000:
+            steps += 1
+            v = b.view()
+            if b.phase == Phase.RENTAL:
+                _rent(b, v)
+                views = []
+                continue
+            if b.phase == Phase.SWAP:
+                assert isinstance(v, SwapView) and len(v.defeated) == 3
+                rec = v.defeated
+                own = v.own_party                         # as the battle left them (healed when the next starts)
+                assert rec[0].team_max_hp == sum(m.max_hp for m in own)
+                lost = sum(m.max_hp - m.hp for m in own)
+                hps = [[m.hp for m in w.own_party] for w in views] + [[m.hp for m in own]]
+                healed = any(w[i] > u[i] for u, w in zip(hps, hps[1:]) for i in range(3))
+                total = sum(r.damage for r in rec)
+                assert total >= lost and (healed or total == lost), (total, lost, healed)
+                exact += not healed
+                assert sum(r.knockouts for r in rec) == sum(m.hp == 0 for m in own)
+                n_battle = sum(not w.forced_switch for w in views)
+                assert sum(r.turns for r in rec) >= n_battle
+                for j in range(3):
+                    seen = [sum(max(0, s) for s in w.enemy_active.stat_stages) for w in views
+                            if w.enemy_active.party_index == j]
+                    assert rec[j].max_boosts >= max(seen, default=0)
+                    assert 0 <= rec[j].damage_frac <= 1 and rec[j].hits_taken <= rec[j].turns
+                rested = any(w.last_turn.own_action == ACTION_MOVE and MOVES[w.last_turn.own_move]["effect"] ==
+                             MOVES[MOVE["REST"]]["effect"] for w in views)
+                if any(m.status and m.hp for m in own) and not rested:
+                    assert any(r.inflicted_status for r in rec)
+                    statuses += 1
+                assert all(isinstance(r, FoeRecord) for r in rec)
+                swaps += 1
+                b.act(None)
+                views = []
+                continue
+            views.append(v)
+            if not v.forced_switch and v.switch_targets and rng.random() < 0.1:
+                b.act(("switch", rng.choice(v.switch_targets)))
+            else:
+                b.act(battler(v))
+    print(f"\n{swaps} swaps ({exact} with the HP sum checked exactly, {statuses} with a status on us)")
+    assert swaps > 30 and exact > 10 and statuses > 0, (swaps, exact, statuses)

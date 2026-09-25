@@ -340,10 +340,10 @@ EncodeCtx to_ctx(const py::dict& d) {
 py::dict to_dict(const EncodedObs& e) {
     py::dict d;
     d["mon_ids"] = arr<int64_t, 2>(&e.mon_ids[0][0], {6, MON_IDS});
-    d["mon_num"] = arr<float, 2>(&e.mon_num[0][0], {6, MON_NUM});
-    d["move_num"] = arr<float, 3>(&e.move_num[0][0][0], {6, 4, MOVE_NUM});
+    d["mon_num"] = arr<float, 2>(e.mon_num, {6, e.mon_w});
+    d["move_num"] = arr<float, 3>(e.move_num, {6, 4, e.move_w});
     d["ctx_ids"] = arr<int64_t, 1>(e.ctx_ids, {CTX_IDS});
-    d["ctx_num"] = arr<float, 1>(e.ctx_num, {CTX_NUM});
+    d["ctx_num"] = arr<float, 1>(e.ctx_num, {e.ctx_w});
     d["mask"] = arr<bool, 1>(e.mask, {7});
     d["active"] = py::module_::import("numpy").attr("int64")(e.active);
     return d;
@@ -353,7 +353,7 @@ py::dict to_dict(const EncodedObs& e) {
 
 void bind_observer(py::module_& m) {
     py::class_<ObsMemory>(m, "ObsMemory",
-                          "The C++ BattleObserver (pybattle/view.py) + rl.encode.battle v3 (include/gen3_observer.hpp)")
+                          "The C++ BattleObserver (pybattle/view.py) + rl.encode.battle v3 / v4 (include/gen3_observer.hpp)")
         .def(py::init([](int hint_type, int hint_style) {
                  ObsMemory mem;
                  obs_init(mem, static_cast<uint16_t>(hint_type), static_cast<uint16_t>(hint_style));
@@ -403,6 +403,10 @@ void bind_observer(py::module_& m) {
             return out;
         })
         .def_property_readonly_static("nbytes", [](py::object) { return sizeof(ObsMemory); });
+
+    m.def("set_encode_version", &set_encode_version, py::arg("version"),
+          "Encoding version of ObsMemory.encode and the C++ search (3 or 4); rl.encode.set_version calls it.");
+    m.def("encode_version", &encode_version);
 
     // The decomp tables the C++ observer uses (tests compare them with game_data.json)
     m.def("obs_tables", []() {

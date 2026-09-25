@@ -30,17 +30,20 @@
 namespace pkmn {
 
 #if !PKMN_HAVE_OBSERVER
-// Same layout as gen3_observer.hpp (encoding v3, rl/encode.py battle()).
+// Same layout as gen3_observer.hpp (rl/encode.py battle(), packed numeric arrays sized for the largest version).
 struct EncodeCtx { int streak, battle, challenge, rents; };
-constexpr int MON_IDS = 19, MON_NUM = 106, MOVE_NUM = 17, CTX_IDS = 2, CTX_NUM = 99;
+constexpr int MON_IDS = 19, CTX_IDS = 2, N_DEFEATED = 6;
+constexpr int MON_NUM_V3 = 106, MON_NUM_V4 = MON_NUM_V3 + N_DEFEATED, MOVE_NUM = 17, CTX_NUM = 99;
+constexpr int MON_NUM_MAX = MON_NUM_V4, MOVE_NUM_MAX = MOVE_NUM, CTX_NUM_MAX = CTX_NUM;
 struct EncodedObs {
     int64_t mon_ids[6][MON_IDS];
-    float mon_num[6][MON_NUM];
-    float move_num[6][4][MOVE_NUM];
+    float mon_num[6 * MON_NUM_MAX];
+    float move_num[6 * 4 * MOVE_NUM_MAX];
     int64_t ctx_ids[CTX_IDS];
-    float ctx_num[CTX_NUM];
+    float ctx_num[CTX_NUM_MAX];
     bool mask[7];
     int64_t active;
+    int32_t mon_w, move_w, ctx_w;       // this observation's MON_NUM, MOVE_NUM, CTX_NUM
 };
 #endif
 

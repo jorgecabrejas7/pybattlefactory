@@ -49,7 +49,13 @@ def _record(n_battles: int, seed: int):
             return policy(drv, dec)
 
         trace = record_battle(d, observing_policy)
-        out.append((trace, hints, views))
+        late = obs.copy()
+        obs.finish(_FieldOrderRam(d))                  # at the frame the battle was decided
+        # EmuBackend notices the outcome in advance_factory, up to 8 frames later (pressing A): the same records
+        d.mash_until(lambda: False, max_frames=16)
+        late.finish(_FieldOrderRam(d))
+        assert late.foe_records() == obs.foe_records()
+        out.append((trace, hints, views, [dataclasses.asdict(r) for r in obs.foe_records()]))
     return out
 
 
@@ -70,16 +76,22 @@ def _replay_views(trace, hints):
             g.choose_move(action["move"])
         else:
             g.choose_switch(action["switch"])
-    return views
+    assert g.run() == Gen3Game.Decision.BATTLE_OVER
+    obs.finish(g)
+    return views, [dataclasses.asdict(r) for r in obs.foe_records()]
 
 
 def test_views_identical_on_emulator_and_simulator():
     compared = 0
-    for trace, hints, emu_views in _record(n_battles=3, seed=7):
-        sim_views = _replay_views(trace, hints)
+    records = 0
+    for trace, hints, emu_views, emu_records in _record(n_battles=3, seed=7):
+        sim_views, sim_records = _replay_views(trace, hints)
         assert len(sim_views) == len(emu_views)
         for i, (e, s) in enumerate(zip(emu_views, sim_views)):
             diff = {k: (e[k], s[k]) for k in e if e[k] != s[k]}
             assert not diff, f"decision {i}: emulator != simulator: {diff}"
             compared += 1
-    assert compared > 10
+        # the defeated-opponent records of the swap view (BattleObserver.finish at the end of the battle)
+        assert emu_records == sim_records, f"records: emulator {emu_records} != simulator {sim_records}"
+        records += sum(r["turns"] > 0 for r in emu_records)
+    assert compared > 10 and records > 0

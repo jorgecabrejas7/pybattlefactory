@@ -67,7 +67,7 @@ def parse():
     p.add_argument("--layers", type=int, default=2)
     p.add_argument("--heads", type=int, default=4)
     p.add_argument("--save-every", type=float, default=3e5, help="battler steps between checkpoints")
-    p.add_argument("--encode-version", type=int, default=3)
+    p.add_argument("--encode-version", type=int, default=3, choices=(2, 3, 4))
     return p.parse_args()
 
 
