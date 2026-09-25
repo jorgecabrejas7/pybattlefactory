@@ -124,7 +124,12 @@ class SimBackend(FactoryBackend):
                 self.phase = Phase.RUN_OVER
                 self.last_battle_won = False
                 return
-            decision = self.game.factory_run_battle()
+            # the battle first runs to its end (gBattleOutcome set) without winding down, so the observer sees the
+            # last turn at the same moment as on the emulator; factory_run_battle then finishes it off
+            decision = self.game.run(400000)
+            if decision == D.BATTLE_OVER:
+                self._observer.finish(self.game)
+                decision = self.game.factory_run_battle()
             if decision == D.BATTLE_OVER:
                 self.last_battle_won = self.game.factory_info.last_outcome == 1
                 self._observer_done = self._observer
@@ -147,7 +152,8 @@ class SimBackend(FactoryBackend):
         if self.phase == Phase.SWAP:
             info = self.game.factory_info
             own = [OwnMon.from_party(m) for m in decode_party(self.game.read(S.addr("gPlayerParty"), 300))]
-            return SwapView(own, self._observer.swap_candidates(self.game), info.hint_type, info.hint_style)
+            return SwapView(own, self._observer.swap_candidates(self.game), info.hint_type, info.hint_style,
+                            self._observer.foe_records())
         if self.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
             return self._observer.observe(self.game, self.phase == Phase.FORCED_SWITCH, self.game.unusable_moves(0),
                                           self.game.can_switch(0))

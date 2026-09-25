@@ -28,6 +28,15 @@ void copyField(const py::dict& d, const char* key, T* dst, size_t n) {
     std::memcpy(dst, a.data(), n * sizeof(T));
 }
 
+// A numeric array of any encoding version: `rows` rows of a width that fits `max_w`; returns the width.
+int32_t copyPacked(const py::dict& d, const char* key, float* dst, size_t rows, int max_w) {
+    auto a = py::array_t<float, py::array::c_style | py::array::forcecast>::ensure(d[key]);
+    if (!a || a.size() % rows != 0 || static_cast<size_t>(a.size()) / rows > static_cast<size_t>(max_w))
+        throw std::runtime_error(std::string("encode.battle: bad array '") + key + "'");
+    std::memcpy(dst, a.data(), a.size() * sizeof(float));
+    return static_cast<int32_t>(a.size() / rows);
+}
+
 // BattleObserver (pybattle/view.py) + rl.encode.battle, through Python.
 class PyNodeObs : public NodeObs {
 public:
@@ -44,10 +53,10 @@ public:
         if (m_view.is_none()) throw std::runtime_error("encode before observe");
         py::dict d = m_encode(m_view, m_ctx);
         copyField<int64_t>(d, "mon_ids", &out.mon_ids[0][0], 6 * MON_IDS);
-        copyField<float>(d, "mon_num", &out.mon_num[0][0], 6 * MON_NUM);
-        copyField<float>(d, "move_num", &out.move_num[0][0][0], 6 * 4 * MOVE_NUM);
+        out.mon_w = copyPacked(d, "mon_num", out.mon_num, 6, MON_NUM_MAX);
+        out.move_w = copyPacked(d, "move_num", out.move_num, 6 * 4, MOVE_NUM_MAX);
         copyField<int64_t>(d, "ctx_ids", out.ctx_ids, CTX_IDS);
-        copyField<float>(d, "ctx_num", out.ctx_num, CTX_NUM);
+        out.ctx_w = copyPacked(d, "ctx_num", out.ctx_num, 1, CTX_NUM_MAX);
         copyField<bool>(d, "mask", out.mask, 7);
         copyField<int64_t>(d, "active", &out.active, 1);
     }
@@ -71,11 +80,17 @@ py::array_t<T> stacked(const EncodedObs* obs, int n, std::vector<py::ssize_t> sh
 // The batch as rl.encode.collate stacks it (before torch): contiguous numpy arrays.
 py::dict batchDict(const EncodedObs* obs, int n) {
     py::dict d;
+    // one layout per batch (the encoding version does not change during a search)
+    const py::ssize_t mw = n ? obs[0].mon_w : MON_NUM_V3, vw = n ? obs[0].move_w : MOVE_NUM,
+                      cw = n ? obs[0].ctx_w : CTX_NUM;
+    for (int i = 1; i < n; i++)
+        if (obs[i].mon_w != mw || obs[i].move_w != vw || obs[i].ctx_w != cw)
+            throw std::runtime_error("observations of different encoding layouts in one batch");
     d["mon_ids"] = stacked<int64_t>(obs, n, {6, MON_IDS}, offsetof(EncodedObs, mon_ids), 6 * MON_IDS);
-    d["mon_num"] = stacked<float>(obs, n, {6, MON_NUM}, offsetof(EncodedObs, mon_num), 6 * MON_NUM);
-    d["move_num"] = stacked<float>(obs, n, {6, 4, MOVE_NUM}, offsetof(EncodedObs, move_num), 6 * 4 * MOVE_NUM);
+    d["mon_num"] = stacked<float>(obs, n, {6, mw}, offsetof(EncodedObs, mon_num), 6 * mw);
+    d["move_num"] = stacked<float>(obs, n, {6, 4, vw}, offsetof(EncodedObs, move_num), 6 * 4 * vw);
     d["ctx_ids"] = stacked<int64_t>(obs, n, {CTX_IDS}, offsetof(EncodedObs, ctx_ids), CTX_IDS);
-    d["ctx_num"] = stacked<float>(obs, n, {CTX_NUM}, offsetof(EncodedObs, ctx_num), CTX_NUM);
+    d["ctx_num"] = stacked<float>(obs, n, {cw}, offsetof(EncodedObs, ctx_num), cw);
     d["mask"] = stacked<bool>(obs, n, {7}, offsetof(EncodedObs, mask), 7);
     d["active"] = stacked<int64_t>(obs, n, {}, offsetof(EncodedObs, active), 1);
     return d;

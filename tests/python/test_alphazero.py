@@ -19,9 +19,16 @@ from rl.model import FactoryNet
 TINY = ["--sims", "16", "--dets", "2", "--t-budget", "16", "--t-considered", "4", "--holdout", "0.3"]
 
 
-def _net(seed=0):
+@pytest.fixture(autouse=True)
+def _keep_encode_version():
+    v = encode.VERSION
+    yield
+    encode.set_version(v)
+
+
+def _net(seed=0, version=4):
     torch.manual_seed(seed)
-    encode.set_version(3)
+    encode.set_version(version)
     return FactoryNet(share="embeddings").eval()
 
 
@@ -118,7 +125,7 @@ def test_value_target_and_start_weights():
 @pytest.fixture(scope="module")
 def selfplay_samples():
     torch.set_num_threads(2)
-    encode.set_version(3)
+    v = encode.VERSION
     sp = AZ.SelfPlayer(AZ.worker_cfg(AZ.parse(TINY)), seed=3)
     got = {k: [] for k in AZ.KINDS}
     for _ in range(40):
@@ -128,6 +135,7 @@ def selfplay_samples():
                 got[k].append(d)
         if all(got.values()):
             break
+    encode.set_version(v)
     return {k: AZ.merge([{k: d} for d in v] + [{}])[k] if v else None for k, v in got.items()}
 
 
@@ -297,7 +305,7 @@ def test_inference_server_reload(tmp_path):
     for seed in (0, 1):
         net = _net(seed)
         p = str(tmp_path / f"snap{seed}.pt")
-        torch.save({"net": net.state_dict(), "args": {"algo": "alphazero", "encode_version": 3, "d_emb": 64, "d": 128,
+        torch.save({"net": net.state_dict(), "args": {"algo": "alphazero", "encode_version": 4, "d_emb": 64, "d": 128,
                                                       "layers": 2, "heads": 4, "share": "embeddings"},
                     "value_norm": {"battler": {"mean": 0.3 + 0.2 * seed, "var": 0.04, "seen": True}}}, p)
         paths.append(p)

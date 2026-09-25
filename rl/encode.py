@@ -8,6 +8,7 @@ Every decision becomes 6 Pokemon tokens + 1 context token:
 Embedding ids reserve a NONE and an UNKNOWN index per table: an unrevealed enemy item is UNKNOWN, a Pokemon
 holding nothing is NONE. Numbers use fixed game-bound scales. IVs, EVs and nature are not given (already in the
 stats); nor are the attendant's hints to the tactician. The battler's view includes them (it's in BattleView).
+From v4 the swap's defeated-team tokens also carry how hard each of those Pokemon was (SwapView.defeated).
 """
 
 import math
@@ -49,19 +50,37 @@ FIELD_NUM = (len(WEATHERS) + 2 + 2 * 8 + 3 + 3 + 4 + 3 + 4 + 3 + 2 + 2 + 2 + N_H
 CTX_IDS = 2
 N_ROUNDS = 7                                # rounds 1-6, and 7+
 
-# Encoding versions (docs/RL_DECISIONS.md): 2 = ppo_joint_v1/v2; 3 = + damage/speed estimates, round one-hot.
+# Encoding versions (docs/RL_DECISIONS.md): 2 = ppo_joint_v1/v2; 3 = + damage/speed estimates, round one-hot;
+# 4 (§17) = estimates without the opponent's IVs (any IV 0-31 at its level), Thick Club / Light Ball on the right
+# species, + N_DEFEATED numbers per Pokemon token: how hard each defeated opponent was (swap only; zeros elsewhere).
 VERSION = None
 MON_NUM = MOVE_NUM = CONTEXT_NUM = CTX_NUM = None
+VERSIONS = (2, 3, 4)
+N_DEFEATED = 6          # FoeRecord: damage, knockouts, turns, hits taken, max boosts, inflicted status
 
 
 def set_version(v):
-    """Select the observation layout. Call before building networks or forking environment workers."""
+    """Select the observation layout. Call before building networks or forking environment workers. The C++
+    encoder (pybattle_native, versions 3-4) follows the same switch."""
     global VERSION, MON_NUM, MOVE_NUM, CONTEXT_NUM, CTX_NUM
+    if v not in VERSIONS:
+        raise ValueError(f"encoding version must be one of {VERSIONS}, not {v!r}")
     VERSION = v
-    MON_NUM = 6 + 1 + 1 + 5 + 6 + len(MAJOR_STATUSES) + 1 + 1 + 1 + N_ACTIVE + (4 if v >= 3 else 0)
+    MON_NUM = 6 + 1 + 1 + 5 + 6 + len(MAJOR_STATUSES) + 1 + 1 + 1 + N_ACTIVE + (4 if v >= 3 else 0) \
+        + (N_DEFEATED if v >= 4 else 0)
     MOVE_NUM = 14 + (3 if v >= 3 else 0)
     CONTEXT_NUM = (1 + 7 + N_ROUNDS + 6 + 1 + 1) if v >= 3 else (1 + 7 + 1 + 6 + 1 + 1)
     CTX_NUM = FIELD_NUM + CONTEXT_NUM
+    _native_set_version(v)
+
+
+def _native_set_version(v):
+    try:
+        from pybattle import pybattle_native as native
+    except ImportError:
+        return
+    if v >= 3 and hasattr(native, "set_encode_version"):
+        native.set_encode_version(v)
 
 
 set_version(3)
@@ -132,6 +151,14 @@ def _active_feats(a, max_hp=None):
     return np.concatenate([f, _onehot(a.semi_invulnerable, len(SEMI_INVULNERABLE)), types])
 
 
+def _defeated_feats(rec):
+    """v4: FoeRecord -> N_DEFEATED numbers (zeros when there is no record)."""
+    if rec is None:
+        return [0.0] * N_DEFEATED
+    return [min(rec.damage_frac, 1.0), min(rec.knockouts, 3) / 3, min(rec.turns, 20) / 20, min(rec.hits_taken, 10) / 10,
+            min(rec.max_boosts, 12) / 12, float(rec.inflicted_status)]
+
+
 def _own_mon(m, *, active=None, is_active=False, slot0=False, usable=None, last_move=0, est=None, threat=None,
              speed=None):
     """A Pokemon the player controls (battle party, rental candidate, swap team)."""
@@ -146,7 +173,8 @@ def _own_mon(m, *, active=None, is_active=False, slot0=False, usable=None, last_
         np.array(m.stats, np.float32) / 500, np.array(sp["base"], np.float32) / 255,
         _onehot(m.status, len(MAJOR_STATUSES)), [min(getattr(m, "sleep_turns", 0), 5) / 5], [float(slot0)],
         [m.level / 100], _active_feats(active, m.max_hp),
-        (list(threat or (0.0, 0.0)) + list(speed or (0.0, 0.0))) if VERSION >= 3 else []]).astype(np.float32)
+        (list(threat or (0.0, 0.0)) + list(speed or (0.0, 0.0))) if VERSION >= 3 else [],
+        [0.0] * N_DEFEATED if VERSION >= 4 else []]).astype(np.float32)
     flags = [(False,) * 4] * 4
     if active is not None:
         flags = [(mv[i] and mv[i] == active.encored_move, mv[i] and mv[i] == active.disabled_move,
@@ -158,8 +186,9 @@ def _own_mon(m, *, active=None, is_active=False, slot0=False, usable=None, last_
     return ids, num, moves
 
 
-def _seen_mon(m, *, active=None, is_active=False, last_move=0, est=None):
-    """An opponent Pokemon as the player knows it. Never-seen Pokemon are all UNKNOWN / zero."""
+def _seen_mon(m, *, active=None, is_active=False, last_move=0, est=None, record=None):
+    """An opponent Pokemon as the player knows it. Never-seen Pokemon are all UNKNOWN / zero. `record`: its
+    FoeRecord (v4 swap)."""
     if not m.seen:
         ids = [SPECIES_UNK, TYPE_UNK, TYPE_UNK, ITEM_UNK, ABILITY_UNK] + [MOVE_UNK] * 4 + [EFFECT_UNK] * 4 \
               + [TYPE_UNK] * 4 + [ABILITY_UNK, ABILITY_UNK]
@@ -178,7 +207,8 @@ def _seen_mon(m, *, active=None, is_active=False, last_move=0, est=None):
         [0.0, 1.0, float(is_active), 1.0, float(m.fainted), 0.0], [hp], [0.0],
         np.zeros(5, np.float32), np.array(m.base_stats or [0] * 6, np.float32) / 255,
         _onehot(m.status, len(MAJOR_STATUSES)), [min(m.sleep_turns, 5) / 5], [0.0],
-        [m.level / 100], _active_feats(active), [0.0] * 4 if VERSION >= 3 else []]).astype(np.float32)
+        [m.level / 100], _active_feats(active), [0.0] * 4 if VERSION >= 3 else [],
+        _defeated_feats(record) if VERSION >= 4 else []]).astype(np.float32)
     moves = []
     for i in range(4):
         known = i < len(revealed)
@@ -220,7 +250,7 @@ def battle(view, ctx):
     lt = view.last_turn
     a_own, a_foe = view.own_active.party_index, view.enemy_active.party_index
     if VERSION >= 3:
-        own_est, foe_est, threats, speed = damage.battle_estimates(view, ctx)
+        own_est, foe_est, threats, speed = damage.battle_estimates(view, ctx, version=VERSION)
     else:
         own_est, foe_est, threats, speed = [None] * 3, None, [None] * 3, [None] * 3
     mons = [_own_mon(m, active=view.own_active if i == a_own else None, is_active=i == a_own,
@@ -265,7 +295,8 @@ def rental(view, ctx):
 def swap(view, ctx, valid=None):
     """`valid(i, j)` (optional) says whether the backend accepts trading own slot i for enemy slot j."""
     mons = [_own_mon(m, slot0=i == 0) for i, m in enumerate(view.own_party[:3])]
-    mons += [_seen_mon(m) for m in view.enemy_party[:3]]
+    records = getattr(view, "defeated", None) or [None] * 3
+    mons += [_seen_mon(m, record=records[j]) for j, m in enumerate(view.enemy_party[:3])]
     own_sp = [m.species for m in view.own_party[:3]]
     mask = np.zeros(10, bool)
     mask[0] = True

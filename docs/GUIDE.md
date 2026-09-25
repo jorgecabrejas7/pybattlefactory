@@ -417,6 +417,11 @@ at 255).
 - The team you just beat: **species**, because that's what the swap screen shows (plus the
   species' types, base stats and possible abilities), and whatever the battle revealed: moves,
   item, ability.
+- `defeated`: one `FoeRecord` per beaten Pokémon, how hard it was as you watched the battle: HP
+  your team lost during its turns (`damage`, over `team_max_hp`), your Pokémon that fainted then
+  (`knockouts`), `turns` on the field, turns your attacks dropped its HP bar (`hits_taken`), its
+  highest sum of positive stat stages (`max_boosts`) and whether it gave one of yours a status
+  (`inflicted_status`). All zeros when the battle was not observed.
 - The hints about your **next** opponent (the game gives them before asking about the swap).
 
 **`RunInfo`**: the streak and battle numbers above.

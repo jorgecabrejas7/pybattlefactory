@@ -1,4 +1,4 @@
-"""Decision-time search for the tactician (rentals and swaps) by simulation (alphazero_v1, docs/RL_DECISIONS.md §17).
+"""Decision-time search for the tactician (rentals and swaps) by simulation (alphazero_v1, docs/RL_DECISIONS.md §18).
 
     ts = TacticianSearch(battler_evaluator, tactician_values, budget=256)
     res = ts.search(backend, "rental" | "swap", obs, logp)     # at a RENTAL / SWAP decision of a SimBackend
@@ -132,9 +132,9 @@ class BattleSimulator:
         self.evaluator = evaluator
         self.max_decisions = max_decisions
         if cpp_obs is None:
-            cpp_obs = NativeObsMemory is not None and encode.VERSION == 3
-        if cpp_obs and (NativeObsMemory is None or encode.VERSION != 3):
-            raise ValueError("the C++ observer needs the extension's ObsMemory and encoding version 3")
+            cpp_obs = NativeObsMemory is not None and encode.VERSION in (3, 4)
+        if cpp_obs and (NativeObsMemory is None or encode.VERSION not in (3, 4)):
+            raise ValueError("the C++ observer needs the extension's ObsMemory and encoding version 3 or 4")
         self.cpp = cpp_obs
         self.steps = self.net_calls = self.errors = 0
 
@@ -207,7 +207,8 @@ class BattleSimulator:
 
 def next_tactician_obs(be):
     """After a won simulated battle: the next tactician decision's (kind, observation). The swap screen's defeated
-    team is shown with its species only (the simulated battle's reveals are not tracked)."""
+    team is shown with its species only and without the v4 defeated-foe records (zeros): the simulated battle is
+    observed by the C++ observer, which does not keep reveals or records."""
     fp = be.game.factory_phase
     if fp == _P.SWAP:
         be.phase = Phase.SWAP

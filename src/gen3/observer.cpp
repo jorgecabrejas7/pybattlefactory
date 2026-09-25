@@ -1,4 +1,4 @@
-// The player's observer and the v3 battle encoder in C++ (include/gen3_observer.hpp).
+// The player's observer and the v3 / v4 battle encoder in C++ (include/gen3_observer.hpp).
 //
 // Every function here mirrors a function of pybattle/view.py (BattleObserver), rl/encode.py or
 // rl/damage.py, with the same name, and follows it line by line; read the Python for the reasons
@@ -16,6 +16,7 @@ extern "C" {
 #include <cmath>
 #include <cstring>
 #include <initializer_list>
+#include <stdexcept>
 
 namespace pkmn {
 
@@ -1204,6 +1205,19 @@ Range hp_range(int base, int iv, int level = 100) {
             std::floor((double)((2 * base + iv + 63) * level) / 100) + level + 10};
 }
 
+// v4: any IV 0-31 (and EVs 0-252, natures 0.9-1.1)
+Range stat_range_any_iv(int base, int level) {
+    double lo = std::floor((std::floor((double)(2 * base * level) / 100) + 5) * 0.9);
+    double hi = std::floor((std::floor((double)((2 * base + 31 + 63) * level) / 100) + 5) * 1.1);
+    return {lo, hi};
+}
+
+Range hp_range_any_iv(int base, int level) {
+    if (base == 1) return {1, 1};
+    return {std::floor((double)(2 * base * level) / 100) + level + 10,
+            std::floor((double)((2 * base + 31 + 63) * level) / 100) + level + 10};
+}
+
 inline bool is_physical(int t) { return t < 9; }
 
 // ability sets: 0 = empty set (ability 0 never matches the abilities tested)
@@ -1239,6 +1253,7 @@ struct DmgArgs {
     int weather = 0;
     double atk_hp_frac = 1.0;
     Range def_hp{1, 1};
+    int version = 3;                    // <= 3: the v3 species quirk of Thick Club / Light Ball
 };
 
 // rl/damage.py's SP_CUBONE, SP_MAROWAK, SP_PIKACHU: the three species ids in id order (a known quirk of the v3
@@ -1289,8 +1304,14 @@ Range move_damage(int move, Range atk, Range dfn, const DmgArgs& d) {
     if (phys && aa == A::HUSTLE) a_mult *= 1.5;
     int he = item_hold_raw(d.atk_item);
     if (phys && he == H::CHOICE_BAND) a_mult *= 1.5;
-    if (phys && he == H::THICK_CLUB && (d.atk_species == SP_CUBONE || d.atk_species == SP_MAROWAK)) a_mult *= 2;
-    if (!phys && he == H::LIGHT_BALL && d.atk_species == SP_PIKACHU) a_mult *= 2;
+    if (d.version <= 3) {
+        if (phys && he == H::THICK_CLUB && (d.atk_species == SP_CUBONE || d.atk_species == SP_MAROWAK)) a_mult *= 2;
+        if (!phys && he == H::LIGHT_BALL && d.atk_species == SP_PIKACHU) a_mult *= 2;
+    } else {
+        namespace SP = obsgen::species;
+        if (phys && he == H::THICK_CLUB && (d.atk_species == SP::CUBONE || d.atk_species == SP::MAROWAK)) a_mult *= 2;
+        if (!phys && he == H::LIGHT_BALL && d.atk_species == SP::PIKACHU) a_mult *= 2;
+    }
     for (int k = 0; k < obsgen::N_TYPE_POWER_ITEMS; k++)
         if (obsgen::TYPE_POWER_ITEMS[k][0] == he) {
             if (obsgen::TYPE_POWER_ITEMS[k][1] == mtype) power = power * (100 + item_param_raw(d.atk_item)) / 100;
@@ -1329,19 +1350,32 @@ struct Estimates {
     double speed[3][2];
 };
 
-void battle_estimates(const ObsView& v, const EncodeCtx& ctx, Estimates& es) {
+void battle_estimates(const ObsView& v, const EncodeCtx& ctx, int version, Estimates& es) {
     const ObsSeenMon& foe = v.enemy[std::max(0, std::min(2, v.enemy_active.party_index))];
     const ObsActive& fa = v.enemy_active;
-    int row = std::min(ctx.challenge, 7);
-    row = std::max(0, std::min(obsgen::N_FIXED_IV_ROWS - 1, row));
-    int iv = obsgen::FACTORY_FIXED_IVS[row][ctx.battle == 6 ? 1 : 0];
     int base[6] = {0, 0, 0, 0, 0, 0};
     if (foe.species)
         for (int k = 0; k < 6; k++) base[k] = SPECIES(foe.species).base[k];
-    Range f_hp = hp_range(base[0], iv);
-    Range f_atk[2] = {stat_range(base[1], iv), stat_range(base[4], iv)};
-    Range f_def[2] = {stat_range(base[2], iv), stat_range(base[5], iv)};
-    Range f_spe = stat_range(base[3], iv);
+    Range f_hp, f_atk[2], f_def[2], f_spe;
+    if (version <= 3) {
+        int row = std::min(ctx.challenge, 7);
+        row = std::max(0, std::min(obsgen::N_FIXED_IV_ROWS - 1, row));
+        int iv = obsgen::FACTORY_FIXED_IVS[row][ctx.battle == 6 ? 1 : 0];
+        f_hp = hp_range(base[0], iv);
+        f_atk[0] = stat_range(base[1], iv);
+        f_atk[1] = stat_range(base[4], iv);
+        f_def[0] = stat_range(base[2], iv);
+        f_def[1] = stat_range(base[5], iv);
+        f_spe = stat_range(base[3], iv);
+    } else {
+        int lvl = foe.level ? foe.level : 100;
+        f_hp = hp_range_any_iv(base[0], lvl);
+        f_atk[0] = stat_range_any_iv(base[1], lvl);
+        f_atk[1] = stat_range_any_iv(base[4], lvl);
+        f_def[0] = stat_range_any_iv(base[2], lvl);
+        f_def[1] = stat_range_any_iv(base[5], lvl);
+        f_spe = stat_range_any_iv(base[3], lvl);
+    }
     int f_ab = known_ability(foe);
     int f_item = foe.item > 0 ? foe.item : 0;
     double f_frac = std::max(foe.hp_pixels, 0) / 48.0;
@@ -1372,6 +1406,7 @@ void battle_estimates(const ObsView& v, const EncodeCtx& ctx, Estimates& es) {
             d.weather = v.weather;
             d.atk_hp_frac = me.max_hp ? (double)me.hp / me.max_hp : 0;
             d.def_hp = f_hp;
+            d.version = version;
             Range r = move_damage(mv, {a, a}, f_def[k], d);
             double lo_f = r.lo / f_hp.hi, hi_f = r.hi / f_hp.lo;
             es.own[i][j][0] = std::min(lo_f, 1.5);
@@ -1400,6 +1435,7 @@ void battle_estimates(const ObsView& v, const EncodeCtx& ctx, Estimates& es) {
             d.weather = v.weather;
             d.atk_hp_frac = f_frac;
             d.def_hp = {(double)me.max_hp, (double)me.max_hp};
+            d.version = version;
             Range r = move_damage(mv, f_atk[k], {dv, dv}, d);
             double frac = me.max_hp ? r.hi / me.max_hp : 0;
             worst = std::max(worst, std::min(frac, 1.5));
@@ -1437,6 +1473,7 @@ void battle_estimates(const ObsView& v, const EncodeCtx& ctx, Estimates& es) {
         d.weather = v.weather;
         d.atk_hp_frac = f_frac;
         d.def_hp = {(double)me.max_hp, (double)me.max_hp};
+        d.version = version;
         Range r = move_damage(mv, f_atk[k], {dv, dv}, d);
         es.foe[j][0] = std::min(r.lo / me.max_hp, 1.5);
         es.foe[j][1] = std::min(r.hi / me.max_hp, 1.5);
@@ -1457,7 +1494,9 @@ constexpr int N_HINT_TYPES = N_TYPES + 1, N_STYLES = 8, N_ROUNDS = 7;
 constexpr int ACTIVE_COUNTER_CAP[16] = {5, 15, 2, 6, 5, 2, 6, 5, 3, 2, 5, 5, 3, 2, 2, 4};
 const int RENT_RANKS[5] = {15, 22, 29, 36, 43};
 static_assert(7 + 26 + 16 + 2 + 4 + N_TYPES == N_ACTIVE, "N_ACTIVE");
-static_assert(6 + 1 + 1 + 5 + 6 + 7 + 1 + 1 + 1 + N_ACTIVE + 4 == MON_NUM, "MON_NUM");
+static_assert(6 + 1 + 1 + 5 + 6 + 7 + 1 + 1 + 1 + N_ACTIVE + 4 == MON_NUM_V3, "MON_NUM");
+
+int g_encode_version = 3;
 
 struct Writer {
     float* p;
@@ -1566,6 +1605,8 @@ void own_mon(const ObsOwnMon& m, const ObsActive* active, bool is_active, const 
     w.put(threat[1]);
     w.put(speed[0]);
     w.put(speed[1]);
+    if (g_encode_version >= 4)
+        for (int k = 0; k < N_DEFEATED; k++) w.put(0.0);                         // defeated-opponent record (swap only)
     for (int i = 0; i < 4; i++) {
         bool flags[4] = {false, false, false, false};
         int mv = m.moves[i];
@@ -1593,7 +1634,7 @@ void seen_mon(const ObsSeenMon& m, const ObsActive* active, bool is_active, int 
             ids[13 + i] = TYPE_UNK;
         }
         ids[17] = ids[18] = ABILITY_UNK;
-        for (int k = 0; k < MON_NUM; k++) num[k] = 0.0f;
+        for (int k = 0, n = encode_mon_num(g_encode_version); k < n; k++) num[k] = 0.0f;
         num[1] = 1.0f;
         for (int i = 0; i < 4; i++)
             for (int k = 0; k < MOVE_NUM; k++) moves[i][k] = 0.0f;
@@ -1638,6 +1679,8 @@ void seen_mon(const ObsSeenMon& m, const ObsActive* active, bool is_active, int 
     w.put(m.level / 100.0);
     active_feats(w, active, 0);
     for (int k = 0; k < 4; k++) w.put(0.0);
+    if (g_encode_version >= 4)
+        for (int k = 0; k < N_DEFEATED; k++) w.put(0.0);                         // defeated-opponent record (swap only)
     for (int i = 0; i < 4; i++) {
         bool known = i < nrev;
         int mvid = known ? m.moves[i] : 0;
@@ -1686,20 +1729,35 @@ void obs_observe(ObsMemory& mem, Gen3Game& game, bool forced, uint8_t unusable_m
 
 void obs_rebase(ObsMemory& mem, Gen3Game& game, bool forced) { Observer{mem}.rebase(game, forced); }
 
+void set_encode_version(int version) {
+    if (version != 3 && version != 4)
+        throw std::invalid_argument("the C++ encoder supports encoding versions 3 and 4");
+    g_encode_version = version;
+}
+
+int encode_version() { return g_encode_version; }
+
+int encode_mon_num(int version) { return version >= 4 ? MON_NUM_V4 : MON_NUM_V3; }
+
 void encode_view(const ObsView& v, const EncodeCtx& ctx, EncodedObs& out) {
+    const int version = g_encode_version, mon_w = encode_mon_num(version);
+    out.mon_w = mon_w;
+    out.move_w = MOVE_NUM;
+    out.ctx_w = CTX_NUM;
+    auto moves_of = [&out](int i) { return reinterpret_cast<float (*)[MOVE_NUM]>(out.move_num + i * 4 * MOVE_NUM); };
     Estimates es;
-    battle_estimates(v, ctx, es);
+    battle_estimates(v, ctx, version, es);
     const ObsEvents& lt = v.last_turn;
     int a_own = v.own_active.party_index, a_foe = v.enemy_active.party_index;
     for (int i = 0; i < 3; i++) {
         bool act = i == a_own;
         own_mon(v.own[i], act ? &v.own_active : nullptr, act, act ? v.usable : nullptr, act ? lt.own_move : 0,
-                es.own[i], es.threat[i], es.speed[i], out.mon_ids[i], out.mon_num[i], out.move_num[i]);
+                es.own[i], es.threat[i], es.speed[i], out.mon_ids[i], out.mon_num + i * mon_w, moves_of(i));
     }
     for (int i = 0; i < 3; i++) {
         bool act = i == a_foe;
         seen_mon(v.enemy[i], act ? &v.enemy_active : nullptr, act, act ? lt.enemy_move : 0, es.foe,
-                 act ? es.n_foe : 0, out.mon_ids[3 + i], out.mon_num[3 + i], out.move_num[3 + i]);
+                 act ? es.n_foe : 0, out.mon_ids[3 + i], out.mon_num + (3 + i) * mon_w, moves_of(3 + i));
     }
     int own_max = v.own[std::max(0, std::min(2, a_own))].max_hp;
     if (!own_max) own_max = 1;

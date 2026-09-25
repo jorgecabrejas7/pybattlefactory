@@ -163,6 +163,7 @@ class EmuBackend(FactoryBackend):
                 self._swap_screen_open = True
                 return
             if dec == Decision.BATTLE_OVER:
+                self._observer.finish(_FieldOrderRam(d))     # the last turn, at the moment the battle is decided
                 won = d.battle_outcome() == 1
                 self.last_battle_won = won
                 self.wins += won
@@ -191,7 +192,7 @@ class EmuBackend(FactoryBackend):
                               *self._hints())
         if self.phase == Phase.SWAP:
             own = [OwnMon.from_party(m) for m in decode_party(d.emu.read(S.addr("gPlayerParty"), 300))[:3]]
-            return SwapView(own, self._observer.swap_candidates(d.emu), *self._hints())
+            return SwapView(own, self._observer.swap_candidates(d.emu), *self._hints(), self._observer.foe_records())
         if self.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
             ram = _FieldOrderRam(d)
             return self._observer.observe(ram, self.phase == Phase.FORCED_SWITCH, unusable_moves(d.emu), can_switch(d.emu))

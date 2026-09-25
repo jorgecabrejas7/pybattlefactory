@@ -93,7 +93,8 @@ Se quitan **IVs, EVs y naturaleza**, porque ya están incluidos en los stats.
   según `battle_factory.c:551`);
 - en el alquiler, los 6 candidatos completos;
 - en el intercambio, su equipo completo, con un indicador de la posición 0, y el equipo derrotado: especie más lo
-  revelado en el combate (movimientos, objeto, habilidad), con el token *desconocido* en lo demás.
+  revelado en el combate (movimientos, objeto, habilidad), con el token *desconocido* en lo demás;
+- desde la codificación v4, por cada rival derrotado, cómo de difícil fue en el combate (§17).
 
 **No** se le dan los sets posibles de cada especie. Se descarta `frontier_ids` porque es redundante con el set completo.
 
@@ -440,14 +441,9 @@ Tóxico forzado no cambia nada. La red acertaba al no usarlos a ciegas.
   la evaluación por ronda era el consumo doble de semillas tras una derrota, ya corregido en `eval_round`.
 
 Pendiente (se suman a la lista de abajo):
-- **Codificación v4** (decisiones del usuario, 2026-09-25):
-  - las estimaciones de daño **no usan los IVs del rival**, porque un jugador no los conoce. El IV pasa a ser
-    desconocido y los stats rivales se acotan con cualquier IV de 0 a 31, además de EVs 0–252 y naturaleza 0,9–1,1.
-    Esto sustituye a la tabla actual, que además era incorrecta;
-  - corregir las especies de los objetos: **Hueso Grueso para Cubone y Marowak, Bola Luminosa para Pikachu**
-    (`SP_CUBONE, SP_MAROWAK, SP_PIKACHU` se asignan en el orden de los ids, así que hoy se aplican al revés);
-  - el observador C++ reproduce ambos fallos a propósito para ser idéntico a v3.
-- ~~**Entrenar con búsqueda** (expert iteration, solo en modo legal).~~ Implementado: alphazero_v1 (§17).
+- ~~**Codificación v4**~~ (decisiones del usuario, 2026-09-25): **hecho**, ver §17. v3 queda igual, bit a bit
+  (Python y C++), para que los checkpoints v3 sigan funcionando.
+- ~~**Entrenar con búsqueda** (expert iteration, solo en modo legal).~~ Implementado: alphazero_v1 (§18).
 - **KL del táctico** (revisión 2026-09-25): sus lotes mezclan transiciones de políticas anteriores (quedan pendientes
   hasta su siguiente decisión, y las actualizaciones del combatiente mueven los embeddings compartidos), de ahí los
   picos de approx_kl. No es un fallo de cálculo. `ppo_update` registra ahora `stale_kl` / `stale_clip_frac` (antes de
@@ -488,7 +484,101 @@ reutilizar pocas veces cada muestra y comprobar el crítico con combates de vali
 
 ---
 
-## 17. alphazero_v1: expert iteration desde cero para los dos agentes (`rl/alphazero.py`, `rl/tactician_search.py`)
+## 15b. Comparación de la búsqueda, repetida tras las correcciones (2026-09-25)
+
+Checkpoint final de v3. Evaluación por ronda con las mismas semillas, un entorno nuevo por racha y la búsqueda ya
+corregida:
+- redibuja el turno del rival (sin fuga de su acción);
+- usa la determinización estricta de jugador.
+
+Hojas evaluadas con el servidor de GPU. P(completar la ronda) en %.
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | ≈ P(6 rondas) | ms por decisión |
+|---|---|---|---|---|---|---|---|---|
+| Red sola (608 rachas/ronda) | 68,8 | 70,2 | 38,8 | 57,6 | 21,9 | 19,4 | 0,46 % | 1,4 |
+| MCTS legal 256 (608) | 71,2 | 72,0 | 39,3 | 59,4 | 23,5 | 23,2 | 0,65 % | 24,9 |
+| MCTS legal 1.024 (320) | 72,2 | 71,9 | 42,8 | 59,4 | 23,4 | 21,6 | 0,67 % | 78,5 |
+| Información perfecta 256 (608) | 70,6 | 72,5 | 42,1 | 60,2 | 24,3 | 24,5 | 0,77 % | 25,5 |
+
+Lectura:
+- **La búsqueda legal sigue mejorando en las 6 rondas**, pero **mucho menos** que en la tabla contaminada: +0,5 a +4
+  puntos por ronda. Ninguna ronda es significativa por separado (z < 2), pero el signo es positivo en las 6
+  (p ≈ 0,016 en una prueba de signos; z combinado ≈ 1,9).
+- Buena parte de la mejora anterior venía de conocer la acción del rival.
+- **1.024 simulaciones no mejoran sobre 256.** Profundizar más no ayuda; el límite está en la **calidad del valor y la
+  política de la red** que guían la búsqueda. Es justo lo que mejora *expert iteration*.
+- La información perfecta ayuda algo (0,77 % frente a 0,65 %; es la variante más clara, z combinado ≈ 3,2). Esa es la
+  pérdida por no conocer lo oculto con el sorteo estricto.
+- Hubo 13 errores de búsqueda en ~100 k decisiones (se juega la acción de la red): están por investigar.
+
+## 17. Codificación v4 (`--encode-version 4`, 2026-09-25)
+
+Motivo: la regla del usuario (ninguna decisión puede usar IVs, EVs ni nada que un jugador real no sepa) y dos
+fallos de las estimaciones de v3. Además, el táctico recibe cómo de difícil fue cada rival derrotado.
+**v2 y v3 no cambian** (Python idéntico al de antes bit a bit, comprobado con el código anterior en 1.571 decisiones
+de combate, 40 alquileres y 25 intercambios; C++ v3 idéntico a Python v3), así que los checkpoints v3 cargan y
+codifican igual.
+
+- **Estimaciones de daño y velocidad sin los IVs del rival** (`rl/damage.py`, `version=4`). Los stats ocultos
+  del rival se acotan con **cualquier IV de 0 a 31**, EVs 0–252 y naturaleza 0,9–1,1, al **nivel que se ve** (antes:
+  nivel 100 y la tabla de IVs fijos de la ronda, que el jugador no conoce):
+  - stat: mín. = ⌊(⌊2·base·nivel/100⌋ + 5)·0,9⌋, máx. = ⌊(⌊(2·base + 31 + 63)·nivel/100⌋ + 5)·1,1⌋;
+  - PS: mín. = ⌊2·base·nivel/100⌋ + nivel + 10, máx. = ⌊(2·base + 31 + 63)·nivel/100⌋ + nivel + 10.
+
+  El rango contiene el de cualquier IV fijo (test). Ya no hace falta el contexto de la racha para calcularlas.
+- **Objetos de especie corregidos**: Hueso Grueso ×2 al Ataque de **Cubone y Marowak**, Bola Luminosa ×2 al At. Esp.
+  de **Pikachu** (en v3, `SP_CUBONE, SP_MAROWAK, SP_PIKACHU` salen en orden de id: Pikachu, Cubone, Marowak; se
+  mantiene así en v3).
+- **Dificultad de cada rival derrotado** (para el táctico, en el intercambio). El `BattleObserver` la acumula durante
+  el combate en un `FoeRecord` por posición del equipo rival, y `SwapView.defeated` la entrega (los dos backends
+  construyen la vista con el mismo observador). Cada turno se atribuye al rival que estaba en el campo (al que entra,
+  si cambió voluntariamente). Solo lo que ve el jugador: lo nuestro exacto (PS, estados, debilitados); lo del rival,
+  solo por la pantalla (barra de PS, cambios de stats anunciados).
+
+  | Número (token rival del intercambio) | Escala |
+  |---|---|
+  | PS que perdió nuestro equipo en sus turnos (por cualquier causa: golpes, estado, clima, retroceso) | / PS máx. totales del equipo, recortado a 1 |
+  | Pokémon nuestros debilitados en sus turnos | /3 |
+  | Turnos en el campo | recortado a 20, /20 |
+  | Turnos en que un ataque nuestro le bajó la barra de PS («golpes necesarios») | recortado a 10, /10 |
+  | Máxima suma de sus etapas de stats positivas | recortado a 12, /12 |
+  | Si alguno de los nuestros recibió un estado alterado en sus turnos (no cuenta nuestro Descanso) | 0/1 |
+
+  - Se añaden 6 números al final de `mon_num` de **todos** los tokens (ceros en los tokens propios, en el alquiler y
+    en el combate; también en un `SwapView` sin registros).
+  - El último turno del combate no pasa por ninguna decisión: `BattleObserver.finish(ram)` lo cuenta en el momento en
+    que el juego decide el combate (`gBattleOutcome`). `SimBackend` ejecuta ahora el combate con `Gen3Game.run` hasta
+    ese momento, llama a `finish` y después `factory_run_battle` cierra el combate como antes (los mismos frames).
+    `EmuBackend` llama a `finish` cuando `advance_factory` detecta el final (hasta 8 frames después, mientras sale el
+    mensaje de victoria; el test comprueba que da lo mismo).
+  - Los golpes de varios turnos seguidos sin decisión (Enfado, etc.) cuentan como uno.
+- **Tamaños v4**: `MON_IDS` = 19, **`MON_NUM` = 112** (v3: 106, v2: 102), `MOVE_NUM` = 17, `CTX_IDS` = 2,
+  `CTX_NUM` = 99 (`FIELD_NUM` = 76 + `CONTEXT_NUM` = 23). Solo cambia el codificador de Pokémon (`mon_enc`): hay que
+  entrenar desde cero (o reiniciar `mon_enc`).
+- **C++** (`ObsMemory`, `Searcher`): codifica v3 y v4 con un interruptor global en tiempo de ejecución
+  (`pybattle_native.set_encode_version`; `rl.encode.set_version` lo llama). `EncodedObs` reserva sitio para la
+  disposición más grande y guarda los anchos de cada observación (`mon_w`, `move_w`, `ctx_w`), así que el `Searcher`
+  con el observador Python acepta cualquier versión. El intercambio (y sus registros) solo existe en Python. No hace
+  falta regenerar tablas (los ids de especie ya estaban en `observer_tables.h`).
+- **Validación**:
+  - C++ v4 = Python v4 **bit a bit**: 14.289 codificaciones en rachas completas (rondas 1–8, Noland, cambios
+    forzados, `from_python`) y 5.598 en caminos de búsqueda (determinización, rebase, `sim_step`); lo mismo para v3;
+  - los registros suman lo que pasó (138 intercambios): PS perdidos = PS perdidos por el equipo (exacto en los 102 sin
+    curación visible; ≥ con curación), debilitados = nuestros Pokémon a 0 PS, turnos ≥ decisiones del combate,
+    mejoras ≥ las vistas;
+  - emulador = simulador: los registros coinciden en 12 combates grabados en la ROM (también leyendo el final 16 frames
+    más tarde).
+
+Comando (igual que v3, con la codificación nueva):
+
+```bash
+python -m rl.train --name ppo_joint_v4 --gamma-b 1.0 --start-p0 0.5 --start-max-round 5 --share embeddings \
+    --value-norm 1 --beta 0.5 --beta-anneal-steps 20e6 --encode-version 4
+```
+
+---
+
+## 18. alphazero_v1: expert iteration desde cero para los dos agentes (`rl/alphazero.py`, `rl/tactician_search.py`)
 
 Decisiones del usuario: **los dos agentes desde cero**, búsqueda del combatiente **solo en modo legal**, tamaño de red
 de §16 (d = 128, 2 capas, `share="embeddings"`), tasa de aprendizaje *cosine*.

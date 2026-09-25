@@ -1,4 +1,4 @@
-"""Expert iteration from scratch for both agents (alphazero_v1, docs/RL_DECISIONS.md §17).
+"""Expert iteration from scratch for both agents (alphazero_v1, docs/RL_DECISIONS.md §18).
 
     python -m rl.alphazero --name alphazero_v1
     tensorboard --logdir runs
@@ -116,7 +116,9 @@ def parse(argv=None):
     p.add_argument("--d", type=int, default=128)
     p.add_argument("--layers", type=int, default=2)
     p.add_argument("--heads", type=int, default=4)
-    p.add_argument("--encode-version", type=int, default=3)
+    p.add_argument("--encode-version", type=int, default=4,
+                   help="observation layout (rl/encode.py): 4 = no opponent IVs in the estimates + defeated-foe "
+                        "records at swaps (docs §17); 3 = ppo_joint_v3's")
     # curriculum
     p.add_argument("--start-p0", type=float, default=0.3, help="probability a run starts at round 1")
     # evaluation
@@ -140,8 +142,8 @@ class AZBattler(SearchBattler):
 
     def __init__(self, evaluator, n_sims=128, n_determinizations=8, c_puct=1.5, batch=32, seed=0,
                  dirichlet_alpha=0.3, dirichlet_frac=0.25, observer="auto"):
-        if observer == "auto" and encode.VERSION != 3:
-            observer = "python"                       # the C++ observer encodes version 3 only
+        if observer == "auto" and encode.VERSION not in (3, 4):
+            observer = "python"                       # the C++ observer encodes versions 3 and 4
         super().__init__(None, n_sims=n_sims, n_determinizations=n_determinizations, c_puct=c_puct, batch=batch,
                          mode="legal", seed=seed, impl="cpp", observer=observer, evaluator=evaluator)
         self.alpha, self.frac = dirichlet_alpha, dirichlet_frac
