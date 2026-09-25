@@ -45,9 +45,10 @@ def _diff(py, cpp):
         if a.shape != b.shape or a.dtype != b.dtype:
             out.append(f"{k}: shape/dtype {a.shape} {a.dtype} vs {b.shape} {b.dtype}")
         elif a.dtype.kind == "f":
-            if not np.allclose(a, b, rtol=0, atol=1e-6):
-                bad = np.argwhere(~np.isclose(a, b, rtol=0, atol=1e-6))
-                out.append(f"{k}: {len(bad)} values, first {tuple(bad[0])}: {a[tuple(bad[0])]} vs {b[tuple(bad[0])]}")
+            ints = np.uint32 if a.itemsize == 4 else np.uint64
+            if not np.array_equal(a.view(ints), b.view(ints)):                  # bit for bit
+                bad = np.argwhere(a.view(ints) != b.view(ints)) if a.ndim else [()]
+                out.append(f"{k}: {len(bad)} values, first {tuple(bad[0])}: {a[tuple(bad[0])]!r} vs {b[tuple(bad[0])]!r}")
         elif not np.array_equal(a, b):
             bad = np.argwhere(a != b) if a.ndim else [()]
             out.append(f"{k}: first {tuple(bad[0])}: {a[tuple(bad[0])]} vs {b[tuple(bad[0])]}")

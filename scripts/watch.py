@@ -116,7 +116,8 @@ def main():
     ap.add_argument("--human", action="store_true", help="start in human mode")
     ap.add_argument("--agents", default="", help="module:Tactician,module:Battler (default: random dummies)")
     ap.add_argument("--log", default="watch_log.jsonl")
-    ap.add_argument("--open-level", action="store_true", default=True)
+    ap.add_argument("--open-level", action=argparse.BooleanOptionalAction, default=True,
+                    help="Open Level (level 100); --no-open-level for Level 50")
     ap.add_argument("--seconds", type=float, default=0, help="stop after this long (0 = until closed)")
     ap.add_argument("--snapshot", default="", help="save the window to this PNG when stopping")
     ap.add_argument("--size", default="", help="window size WxH (default: fits the screen)")

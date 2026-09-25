@@ -25,5 +25,5 @@ for atk, dfn, mult in _DATA["type_effectiveness"]:
 def effectiveness(move_type: int, def_types) -> float:
     m = 1.0
     for t in set(def_types):
-        m *= TYPE_EFFECTIVENESS[move_type, t]
+        m *= float(TYPE_EFFECTIVENESS[move_type, t])
     return m

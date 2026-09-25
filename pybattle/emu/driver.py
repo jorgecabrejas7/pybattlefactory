@@ -46,6 +46,14 @@ _STREAK_FACTORY_SINGLES = (1 << 8, 1 << 9)   # winStreakActiveFlags: [lv50, open
 _SB1_FLAGS = 0x1270                          # SaveBlock1.flags (global.h)
 _FLAG_SYS_FACTORY_SILVER = 0x860 + 0x6C      # SYSTEM_FLAGS + 0x6C (constants/flags.h)
 _FLAG_SYS_FACTORY_GOLD = 0x860 + 0x6D
+
+
+def _require(ok, what="unexpected game state"):
+    """A check of the game's state before pressing keys (not an assert: it must also run under python -O)."""
+    if not ok:
+        raise RuntimeError(what if isinstance(what, str) else repr(what))
+
+
 _NUM_TASKS = 16
 
 
@@ -244,7 +252,7 @@ class FactoryDriver:
         return (self.emu.read16(S.addr("gSpecialVar_0x8005")), self.emu.read16(S.addr("gSpecialVar_0x8006")))
 
     def answer_swap_question(self, yes: bool):
-        assert self._in_pre_battle_yes_no()
+        _require(self._in_pre_battle_yes_no())
         if yes:
             self._press_until(K.KEY_A, lambda: not self._in_pre_battle_yes_no())
             if not self.mash_until(lambda: self.decision() == Decision.SWAP_SCREEN, keys=0, max_frames=3000):
@@ -276,7 +284,7 @@ class FactoryDriver:
             self.tap(K.KEY_RIGHT)
         self._press_until(K.KEY_A, lambda: "Swap_Task_HandleYesNo" in self.active_tasks())
         self.mash_until(lambda: False, keys=0, max_frames=30)
-        assert self.emu.read8(scr() + _SWAP_YES_NO_CURSOR_POS) == 0
+        _require(self.emu.read8(scr() + _SWAP_YES_NO_CURSOR_POS) == 0)
         self._press_until(K.KEY_A, lambda: "Swap_Task_HandleYesNo" not in self.active_tasks())
 
     def _swap_normalize(self):
@@ -306,7 +314,7 @@ class FactoryDriver:
 
     def forfeit(self):
         """At the action prompt: RUN, then YES to "forfeit the match?"."""
-        assert self.decision() == Decision.BATTLE_ACTION
+        _require(self.decision() == Decision.BATTLE_ACTION)
         self.emu.write(S.addr("gActionSelectionCursor"), bytes([3]))
         self.tap(K.KEY_A, wait=2)
         # yes/no box in battle: YES is the default
@@ -437,13 +445,13 @@ class FactoryDriver:
 
     def go_to_singles_attendant(self):
         """Stand in front of the Battle Factory singles attendant (lobby), facing her."""
-        assert self.layout() == LAYOUT_LOBBY, "not in the Battle Factory lobby"
+        _require(self.layout() == LAYOUT_LOBBY, "not in the Battle Factory lobby")
         self.walk_to(*_SINGLES_ATTENDANT_SPOT, facing=_DIR_NORTH, avoid=_LOBBY_EXIT_WARPS)
 
     def start_challenge(self, open_level: bool = True):
         """In the lobby: walk to the singles attendant, take the challenge, pick the level mode,
         save, and walk to the rental screen."""
-        assert self.layout() == LAYOUT_LOBBY
+        _require(self.layout() == LAYOUT_LOBBY)
         self.go_to_singles_attendant()
         # Talk until the CHALLENGE/INFO/EXIT menu, choose CHALLENGE; then LV.50 / OPEN LEVEL / EXIT.
         # Other questions on the way (e.g. "record your last battle?" after a won challenge) are
@@ -491,9 +499,10 @@ class FactoryDriver:
 
     def pick_rentals(self, picks: List[int]):
         """Rent the mons at select-screen positions `picks` (in party order) and confirm."""
-        assert len(picks) == 3 and len(set(picks)) == 3
+        _require(len(picks) == 3 and len(set(picks)) == 3)
         for n, pick in enumerate(picks):
-            assert self.decision() == Decision.RENTAL_SELECT, (self.callback2(), self.active_tasks())
+            if self.decision() != Decision.RENTAL_SELECT:
+                _require(False, (self.callback2(), self.active_tasks()))
             scr = self._select_screen()
             selected = lambda: self.emu.read8(scr + _SELECT_MONS_OFFSET + pick * _SELECTABLE_MON_SIZE + 4)
             while self.emu.read8(scr + _SELECT_CURSOR_POS) != pick:
@@ -511,7 +520,7 @@ class FactoryDriver:
                 raise RuntimeError(f"pick {n} (slot {pick}) not registered")
         # "Is this team OK?" — YES is the default
         self.emu.run_frames(20)
-        assert self.emu.read8(self._select_screen() + _SELECT_YES_NO_CURSOR_POS) == 0  # YES
+        _require(self.emu.read8(self._select_screen() + _SELECT_YES_NO_CURSOR_POS) == 0)  # YES
         self._press_until(K.KEY_A, lambda: "Select_Task_HandleYesNo" not in self.active_tasks())
 
     # -- battle -------------------------------------------------------------
@@ -554,7 +563,7 @@ class FactoryDriver:
     def choose_move(self, slot: int) -> bool:
         """At the action prompt: FIGHT, then the move in `slot` (0-3). Returns False when the game
         picked the move itself (Encore, no PP left -> Struggle): FIGHT then skips the move menu."""
-        assert self.decision() == Decision.BATTLE_ACTION
+        _require(self.decision() == Decision.BATTLE_ACTION)
         self.emu.write(S.addr("gActionSelectionCursor"), bytes([0]))
         self.tap(K.KEY_A, wait=2)
         action_phase = {"HandleInputChooseAction", "HandleChooseActionAfterDma3", "HandleChooseMoveAfterDma3"}
@@ -568,7 +577,7 @@ class FactoryDriver:
 
     def choose_switch(self, party_index: int):
         """At the action prompt: POKéMON, then send out `party_index`."""
-        assert self.decision() == Decision.BATTLE_ACTION
+        _require(self.decision() == Decision.BATTLE_ACTION)
         self.emu.write(S.addr("gActionSelectionCursor"), bytes([2]))
         self.tap(K.KEY_A, wait=2)
         if not self.mash_until(lambda: self.decision() == Decision.PARTY_MENU, keys=0, max_frames=600):
@@ -577,7 +586,7 @@ class FactoryDriver:
 
     def choose_party_slot(self, party_index: int):
         """In the battle party menu (voluntary or forced): pick `party_index` and SHIFT/SEND OUT."""
-        assert self.decision() == Decision.PARTY_MENU
+        _require(self.decision() == Decision.PARTY_MENU)
         slot = self._display_slot(party_index)
         menu = S.addr("gPartyMenu")
         for _ in range(12):

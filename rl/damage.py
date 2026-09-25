@@ -86,7 +86,7 @@ def effectiveness(move_type, def_types):
     m = 1.0
     for t in set(def_types):
         if t < 18:
-            m *= TYPE_EFFECTIVENESS[move_type, t]
+            m *= float(TYPE_EFFECTIVENESS[move_type, t])     # Python float: double math with any NumPy (NEP 50)
     return m
 
 
