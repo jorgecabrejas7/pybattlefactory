@@ -80,9 +80,8 @@ def play_round(ckpt, k, variant, n_runs, n_envs=50, seed=777, device="cpu"):
     runs_done = np.zeros(n_envs, int)
 
     def fresh(i):
-        # a new environment per run: env.reset() keeps state across runs (the backend's BattleObserver survives a
-        # reset that happens at a SWAP, i.e. after a completed round), so a run's start would depend on the
-        # previous run's play. Run (i, j) gets its own seed and starts identically in every variant.
+        # a new environment per run: with one environment a run's seed depends on how the earlier ones ended (a
+        # loss already starts the next run), so run (i, j) gets its own seed and starts identically in every variant
         e = FactoryEnv(base + i + 7919 * int(runs_done[i]), win_streak=7 * (k - 1))
         return e, e._advance(NO_ACTION)
 

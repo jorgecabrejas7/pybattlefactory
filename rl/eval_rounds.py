@@ -66,15 +66,20 @@ def eval_round(policy, device, k, n_runs, workers=4, envs_per_worker=8, seed=777
                 finished = True
             if finished:
                 if per_env[i] < target:
-                    done.append((int(wins[i]), bool(wins[i] == 7)))
+                    done.append((int(wins[i]), bool(wins[i] == 7), bool(ev["truncate"])))
                 per_env[i] += 1
                 wins[i] = 0
-                acts[i] = "reset"
+                # after a loss the environment has already started its next run (this event is its rental, and
+                # acts[i] answers it): a "reset" would draw a second run seed and shift every later run of this
+                # environment, so the runs would depend on how the earlier ones ended
+                if "run" not in ev["stats"]:
+                    acts[i] = "reset"
         events = env.step(acts)
     env.close()
-    w = np.array([d[0] for d in done]); c = np.array([d[1] for d in done])
-    losses = (~c).sum()
-    return {"complete": float(c.mean()), "battle": float(w.sum() / (w.sum() + losses)), "n": len(done)}
+    w = np.array([d[0] for d in done]); c = np.array([d[1] for d in done]); t = np.array([d[2] for d in done])
+    losses = (~c & ~t).sum()                    # a truncated run ends without a loss
+    return {"complete": float(c.mean()), "battle": float(w.sum() / max(w.sum() + losses, 1)), "n": len(done),
+            "truncated": int(t.sum())}
 
 
 # ---- in-process mode ---------------------------------------------------------------------------------------------
@@ -131,8 +136,8 @@ def play_env(env_seed, k, n_runs, policy, battler, stats):
         if finished:
             out.append((wins, wins == 7))
             wins = 0
-            # a fresh environment per run: env.reset() keeps some state across runs (see rl/forced_rules.py), so
-            # every run (env, j) gets its own seed and starts identically whatever battler is evaluated
+            # a fresh environment per run: every run (env, j) gets its own seed and starts identically whatever
+            # battler is evaluated (with one environment, a run's seed would depend on how the earlier ones ended)
             env = FactoryEnv(env_seed + 7919 * len(out), win_streak=7 * (k - 1))
             known = ExclusionTracker()
             ev = env._advance(NO_ACTION)
@@ -155,6 +160,8 @@ def play_env(env_seed, k, n_runs, policy, battler, stats):
                 own = [m.mon_id for m in decode_rental_mons(be.game.read_saveblock2(SB2_RENTAL_MONS, 72))[:3]]
                 known.on_swap(view, own)
         ev = env.step(action)
+        if kind == "swap":                      # the team that goes into battle, after the trade
+            known.set_own_ids([m.mon_id for m in decode_rental_mons(be.game.read_saveblock2(SB2_RENTAL_MONS, 72))[:3]])
     return out
 
 
