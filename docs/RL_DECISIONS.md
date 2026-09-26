@@ -1152,3 +1152,14 @@ Comando (igual que en §19.5; los valores por defecto activan el refresco):
 ```bash
 python -m rl.alphazero_v2 --name alphazero_v2 --team-eval runs/team_eval_v1/model.pt
 ```
+
+### 19.7 Corrección del PPO del táctico (2026-09-26, tras 22 iteraciones del primer lanzamiento)
+- **Síntoma**: KL aproximada del táctico 0,11–0,15 y fracción recortada 0,52 en cada iteración (lo normal en PPO es
+  ~0,01–0,02 y ~0,1–0,2), entropía cayendo deprisa (3,18 → 1,82) y EV del crítico negativa; la red sola iba por
+  detrás de v1 a la misma altura, sobre todo en las rondas 5–6.
+- **Causa**: en cada iteración se entrenaba primero el combatiente y después el táctico. Comparten los embeddings,
+  así que al empezar el PPO del táctico su política ya no era la que generó sus muestras: el cociente
+  π_nuevo/π_viejo empezaba lejos de 1 (datos fuera de política), y el recorte actuaba desde el primer paso.
+- **Corrección**: el PPO del táctico se hace **antes** del entrenamiento del combatiente (sus log-probabilidades
+  guardadas son exactamente las de la red actual) y con 2 épocas en vez de 4 (`--t-ppo-epochs 2`). Se relanza
+  alphazero_v2 desde cero.

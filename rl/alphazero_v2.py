@@ -106,7 +106,7 @@ def parse(argv=None):
     p.add_argument("--t-shaping", type=int, default=1, help="potential-based shaping Phi(s') - Phi(s)")
     p.add_argument("--t-imitation", type=float, default=0.0, help="coefficient of CE(pi_eval, pi_net)")
     p.add_argument("--t-eval-temp", type=float, default=0.5, help="pi_eval = softmax(Q_eval / T), T in wins")
-    p.add_argument("--t-ppo-epochs", type=int, default=4)
+    p.add_argument("--t-ppo-epochs", type=int, default=2)
     p.add_argument("--t-clip", type=float, default=0.2)
     p.add_argument("--t-ent", type=float, default=0.01)
     p.add_argument("--t-gae-lambda", type=float, default=0.95)
@@ -752,10 +752,13 @@ def main(argv=None):
 
             # ---- 2. training ----------------------------------------------------------------------------------
             t0 = time.time()
-            tr = AZ.train_iteration(net, opt, replay, new_counts, norms, args, device, rng)
-            tr.update(AZ.heldout_stats(net, replay, norms, args, device))
-            tr.update(tactician_ppo(net, opt, tdata, norms["tactician"], args, device, rng))
+            # the tactician's PPO first: its samples' log-probs come from this very network (the snapshot they were
+            # played with); the battler's update moves the shared embeddings, so run after it the ratio would start
+            # off-policy (docs §19.7)
+            tr = tactician_ppo(net, opt, tdata, norms["tactician"], args, device, rng)
             tr.update(tactician_heldout(net, tdata, norms["tactician"], device))
+            tr.update(AZ.train_iteration(net, opt, replay, new_counts, norms, args, device, rng))
+            tr.update(AZ.heldout_stats(net, replay, norms, args, device))
             t_train = time.time() - t0
             for k, v in tr.items():
                 tb.add_scalar(k.replace("battle/", "battler/"), v, b_steps)
