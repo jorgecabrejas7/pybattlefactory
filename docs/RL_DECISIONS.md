@@ -760,3 +760,83 @@ versión daba en la ronda 5 un 80,3 % frente a 73,0 %: rivales algo más fácile
 **Pendiente de decidir** (elegido provisionalmente al implementar):
 - Tamaño de la iteración: 40.000 decisiones del combatiente (`--decisions-per-iter`) y 200 iteraciones planeadas.
 - La evaluación por ronda en cada iteración (192 × 6 rachas) para el autojuego mientras dura.
+
+## 18b. Resultado de alphazero_v1 y diagnóstico (2026-09-26)
+
+**Resultado.** Parado en la iteración 169/200 (6,8 M decisiones del combatiente), en meseta desde la ~70. P(completar)
+por ronda (red sola, voraz, 512 rachas, mismas semillas para todas las filas; `runs/diag_az1/`):
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | P(6 rondas) |
+|---|---|---|---|---|---|---|---|
+| PPO v3, red sola | 69,3 | 71,3 | 39,1 | 56,6 | 21,3 | 19,7 | 0,46 % |
+| PPO v3 + búsqueda legal 128 | 70,5 | 73,2 | 39,3 | 55,7 | 20,5 | 19,9 | 0,46 % |
+| AZ v1, red sola | 66,0 | 66,8 | 41,8 | 56,6 | 21,1 | 19,5 | 0,43 % |
+| AZ v1 + búsqueda legal 128 | 71,1 | 73,0 | 43,8 | 60,2 | 27,5 | 27,0 | 1,02 % |
+| AZ v1 + búsqueda legal 512 | 72,1 | 74,4 | 52,5 | 68,8 | 30,1 | 29,1 | 1,70 % |
+| AZ v1 + búsqueda **perfecta** 512 (solo diagnóstico) | 76,4 | 78,5 | 48,0 | 71,9 | 32,6 | 35,9 | 2,4 % |
+
+**Diagnóstico.**
+1. *Combatiente*: la búsqueda mejora mucho a la red de AZ (a v3 no), así que el profesor sabe más que el alumno; lo que
+   falla es la transferencia: (a) el objetivo de política son las visitas de 128 simulaciones en 8 árboles con ruido de
+   Dirichlet, casi planas (entropía de visitas 1,51 ≈ la de la red); (b) en el autojuego la acción se sortea de las
+   visitas con temperatura 1 y el agente gana solo el 55 % de los combates (94 % en voraz).
+2. *Crítico del táctico*: ordena como el de v3 (y v3 ya está en el techo: EV ≈ 0,15–0,19 frente a z, casi todo por la
+   posición en la racha), pero con la escala mal (predice ~2 victorias donde el juego voraz da 5–8), porque z venía del
+   autojuego débil del punto 1b.
+3. *Búsqueda del táctico*: su objetivo es casi ruido (dos búsquedas del mismo estado coinciden el 12 % en alquileres) y,
+   jugada en el juego real, no elige mejor que la red (alquiler −0,06, cambio −0,24 ± 0,09 victorias). Una variante con
+   números aleatorios comunes y pocas candidatas (opción B) es consistente pero tampoco mejora a la red (todas las
+   configuraciones dentro de ±2 SE de 0). Causa: el simulador no predice las diferencias entre opciones del táctico.
+4. *Techo*: incluso con información perfecta el combatiente gana solo el 85–87 % de los combates en las rondas 5–6:
+   buena parte de lo que falta está en el equipo (táctico) y en la calidad de la red, no en la información oculta.
+
+## 19. alphazero_v2 (decidido 2026-09-26, desde cero)
+
+### 19.1 Combatiente: Gumbel AlphaZero
+- Raíz con *sequential halving* y ruido de Gumbel (Danihelka et al., 2022) en vez de Dirichlet; **256 simulaciones**.
+- En el autojuego se **juega la acción ganadora del halving** (no se sortea de las visitas): el autojuego juega a su nivel
+  real, y la exploración la da el ruido de Gumbel.
+- Objetivo de política: softmax(logits de la red + σ(Q̂)), donde Q̂ es el valor de cada acción según la búsqueda (el de
+  la búsqueda si se visitó; el valor de la red si no, "Q completados") y σ una transformación monótona que lo escala.
+
+### 19.2 Red evaluadora de equipos (nueva)
+Definiciones:
+- **Ronda**: bloque de 7 combates; empieza con un alquiler y el equipo se devuelve al terminarla (un equipo solo vive
+  en su ronda).
+- **k**: número del combate dentro de la ronda (1..7) en el que se usará el equipo.
+- **Equipo**: los 3 Pokémon, con lo que el jugador sabe de ellos (especie, movimientos, objeto) y su orden (líder).
+- **Opción**: cada elección del táctico (alquiler: trío + líder, ~60; cambio: quedarse o uno de los 3×3 cambios, 10);
+  cada opción da un **equipo resultante**.
+- **W(equipo, ronda, tipo)**: probabilidad de que nuestro combatiente gane **un** combate con ese equipo contra un rival
+  sorteado de esa ronda (sets reales de la Factory, construidos como el juego). Tipos: *normal* (combates 1–6, IV 3),
+  *último* (combate 7, IV 6), *Noland* (combate 7 de las rondas 3 y 6). Red entrenada de forma supervisada con millones
+  de combates simulados (promediar muchos combates por equipo le quita el ruido). Depende del combatiente: se reentrena
+  periódicamente con el combatiente actual.
+- **pᵢ**: W con el tipo que corresponde al combate i de la ronda.
+- **E_ronda**: victorias esperadas en lo que queda de ronda manteniendo el equipo: p_k + p_k·p_{k+1} + … hasta el 7.
+- **P(completar)**: p_k·p_{k+1}·…·p₇.
+- **V_siguiente**: victorias esperadas desde el inicio de la ronda siguiente (no depende del equipo actual, que se
+  devuelve); tabla por ronda aprendida de resultados reales.
+- **Δ**: E_ronda del equipo resultante menos la del equipo actual (cambio) o menos la media de las opciones (alquiler).
+
+Usos:
+1. **Entrada del táctico, por opción**: [E_ronda, W(normal), W(último o Noland), Δ] del equipo resultante (como las
+   estimaciones de daño por movimiento del combatiente).
+2. **Shaping** basado en potencial (Ng et al.): Φ(s) = E_ronda + P(completar) × V_siguiente (unidades de victorias);
+   recompensa extra Φ(s′) − Φ(s) en cada decisión del táctico. No cambia la política óptima.
+3. **Experto del táctico** (ver 19.3).
+
+Información: entrenar W con los sets reales es conocimiento que un jugador adquiere jugando ("este equipo suele ganar en
+la ronda 5"), aceptado por el usuario; nunca información oculta de un rival concreto.
+
+### 19.3 Táctico híbrido
+- **π_red**: política del táctico. **Q_eval(opción)**: Φ del estado resultante según el evaluador.
+  **π_eval** = softmax(Q_eval / T), el "experto".
+- **Ventaja A**: cuánto mejor salió la opción de lo que esperaba el crítico, con resultados reales + shaping (PPO/GAE).
+- Pérdida = coeficiente × CE(π_eval, π_red) [imitación, AlphaZero] + término de PPO con A [experiencia real] + valor.
+- La búsqueda por simulación del táctico (§18) se elimina.
+- **Condición**: antes de dar peso a la imitación se comprueba en el juego real que la opción de π_eval gana más que la
+  de π_red (misma prueba que en 18b.3); si no, el coeficiente de imitación es 0.
+
+### 19.4 Evaluación
+Red sola cada iteración; red + búsqueda legal de 512 simulaciones cada ~5 iteraciones.
