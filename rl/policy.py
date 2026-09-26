@@ -31,7 +31,8 @@ class Policy:
                                                                            device=device)
         elif self.algo in ("ppo", "alphazero"):
             encode.set_version(a.get("encode_version", 2))     # v1/v2 checkpoints predate the versioned layout
-            self.net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "all")).to(device)
+            self.net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "all"),
+                                  opt_feat=a.get("opt_feat", 0)).to(device)      # (alphazero_v2: 4)
         else:
             raise ValueError(f"unknown checkpoint algorithm {self.algo!r}")
         self.net.load_state_dict(ck["net"])

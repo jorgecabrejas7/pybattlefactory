@@ -10,6 +10,16 @@ Batched inputs (see rl/encode.py for the layout):
     move_num  float  [B, 6, 4, MOVE_NUM]
     ctx_ids   int64  [B, CTX_IDS]        last moves (battler) / zeros (tactician)
     ctx_num   float  [B, CTX_NUM]
+    opt_feat  float  [B, 6, 15, F] (rental) / [B, 10, F] (swap)   optional, nets built with opt_feat=F (alphazero_v2)
+
+Per-option features (alphazero_v2, docs/RL_DECISIONS.md §19.3): the team evaluator's [E_round, W(normal),
+W(last or Noland), Delta] of the team each tactician option leads to. A small MLP f of an option's features is
+added to its logit: swap logits + f; for the factorized rental head the joint is tilted, pi(l, p) proportional to
+pi0(l) pi0(p | l) exp(f(l, p)), by adding f(l, p) to the pair logits of row l and log sum_p pi0(p | l) exp(f(l, p))
+to lead l's logit (so rental(), sampling the lead then the pair, and rental_joint() give the same joint). The
+masked mean and max of the legal options' features also enter the tactician critic (a zero-initialized linear map
+added to its input). Without "opt_feat" in the batch, or with opt_feat=0, the network is the v1 one; a v1
+state_dict loads into a net built with opt_feat (the new parameters keep their initialization).
 """
 
 import torch
@@ -70,8 +80,15 @@ class FactoryNet(nn.Module):
     """share="all": one trunk for both agents (ppo_joint_v1/v2). share="embeddings": the tactician has its own
     encoders and transformer (trunk_t) and shares only the embedding tables with the battler."""
 
-    def __init__(self, d_emb=64, d=128, layers=2, heads=4, share="all"):
+    def __init__(self, d_emb=64, d=128, layers=2, heads=4, share="all", opt_feat=0):
         super().__init__()
+        self.opt_feat = int(opt_feat)
+        if self.opt_feat:
+            self.t_feat_rental = mlp(self.opt_feat, 32, 1)
+            self.t_feat_swap = mlp(self.opt_feat, 32, 1)
+            self.t_feat_value = nn.Linear(2 * self.opt_feat, 2 * d)
+            nn.init.zeros_(self.t_feat_value.weight)
+            nn.init.zeros_(self.t_feat_value.bias)
         self.trunk = Trunk(d_emb, d, layers, heads)
         if share != "all":
             self.trunk_t = Trunk(d_emb, d, layers, heads, emb_from=self.trunk)
@@ -87,6 +104,27 @@ class FactoryNet(nn.Module):
         self.t_swap = mlp(3 * d, d, 1)
         self.t_value = mlp(2 * d, d, 1)
         self.register_buffer("pairs", torch.tensor(PAIRS, dtype=torch.long))
+
+    FEAT_PREFIX = "t_feat_"
+
+    def load_state_dict(self, state_dict, strict=True, **kw):
+        """A state_dict without the per-option feature parameters (v1) loads into a net that has them."""
+        own = self.state_dict()
+        missing = [k for k in own if k not in state_dict]
+        if strict and missing and all(k.startswith(self.FEAT_PREFIX) for k in missing):
+            strict = False
+        return super().load_state_dict(state_dict, strict=strict, **kw)
+
+    def _feat(self, x):
+        return x.get("opt_feat") if self.opt_feat else None
+
+    def _feat_value_input(self, feat, legal):
+        """[B, n, F] option features, [B, n] legal -> [B, 2d]: the critic's extra input (masked mean and max)."""
+        m = legal[..., None].float()
+        mean = (feat * m).sum(1) / m.sum(1).clamp_min(1.0)
+        mx = feat.masked_fill(~legal[..., None], -1e4).max(1).values
+        mx = torch.where(legal.any(1, keepdim=True), mx, torch.zeros_like(mx))
+        return self.t_feat_value(torch.cat([mean, mx], -1))
 
     def tactician_trunk(self):
         return self.trunk if self.share == "all" else self.trunk_t
@@ -110,6 +148,12 @@ class FactoryNet(nn.Module):
     # ---- tactician: rental (lead over 6, then pair over 15 pairs given the lead) --------------------------------
     def rental(self, x, lead=None):
         """Returns lead logits [B,6], pair logits [B,15] (conditioned on `lead`, sampled here if None), value."""
+        if self._feat(x) is not None:
+            lead_logits, pair_all, value = self.rental_joint(x)
+            if lead is None:
+                lead = torch.distributions.Categorical(logits=lead_logits).sample()
+            b = torch.arange(len(lead), device=lead.device)
+            return lead_logits, pair_all[b, lead], lead, value
         mons, ctx, _ = self.tactician_trunk()(x, 1)
         c6 = ctx[:, None].expand(-1, 6, -1)
         lead_logits = self.t_lead(torch.cat([mons, c6], -1))[..., 0].masked_fill(~x["lead_mask"], NEG)
@@ -134,8 +178,18 @@ class FactoryNet(nn.Module):
         pair_logits = self.t_pair(torch.cat([pair_h[:, None].expand(-1, 6, -1, -1),
                                              mons[:, :, None].expand(-1, -1, 15, -1),
                                              ctx[:, None, None].expand(-1, 6, 15, -1)], -1))[..., 0]
+        feat = self._feat(x)
+        vin = self._pool(mons, ctx)
+        if feat is not None:
+            pm = x["pair_mask"]
+            f = self.t_feat_rental(feat)[..., 0].masked_fill(~pm, 0.0)          # [B, 6, 15]
+            lp0 = F.log_softmax(pair_logits.masked_fill(~pm, NEG), -1)
+            bonus = torch.logsumexp((lp0 + f).masked_fill(~pm, NEG), -1)          # log sum_p pi0(p|l) e^f(l,p)
+            lead_logits = (lead_logits + bonus.masked_fill(~x["lead_mask"], 0.0)).masked_fill(~x["lead_mask"], NEG)
+            pair_logits = pair_logits + f
+            vin = vin + self._feat_value_input(feat.flatten(1, 2), pm.flatten(1))
         pair_logits = pair_logits.masked_fill(~x["pair_mask"], NEG)            # [B, 6, 15]
-        return lead_logits, pair_logits, self.t_value(self._pool(mons, ctx))[:, 0]
+        return lead_logits, pair_logits, self.t_value(vin)[:, 0]
 
     # ---- tactician: swap (keep, or own slot i x enemy slot j) -> 10 logits ------------------------------------
     def swap(self, x):
@@ -145,5 +199,11 @@ class FactoryNet(nn.Module):
                           ctx[:, None, None].expand(-1, 3, 3, -1)], -1)
         sw = self.t_swap(grid)[..., 0].flatten(1)                                # [B, 9]  index = 3*i + j
         keep = self.t_keep(self._pool(mons, ctx))
-        logits = torch.cat([keep, sw], 1).masked_fill(~x["mask"], NEG)
-        return logits, self.t_value(self._pool(mons, ctx))[:, 0]
+        logits = torch.cat([keep, sw], 1)
+        vin = self._pool(mons, ctx)
+        feat = self._feat(x)
+        if feat is not None:
+            logits = logits + self.t_feat_swap(feat)[..., 0]
+            vin = vin + self._feat_value_input(feat, x["mask"])
+        logits = logits.masked_fill(~x["mask"], NEG)
+        return logits, self.t_value(vin)[:, 0]

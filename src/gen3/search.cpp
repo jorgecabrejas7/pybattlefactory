@@ -11,6 +11,7 @@ extern "C" {
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <exception>
 #include <map>
 #include <stdexcept>
@@ -114,54 +115,48 @@ bool hasChoice(Gen3Game& game) {
     return Gen3Search_HasChoice(unusable, canSwitch ? 1 : 0) != 0;
 }
 
-SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, const float rootPriors[7],
-                      const bool rootLegal[7], float rootValue, const SearchConfig& cfg,
-                      const BatchEvaluator& evaluator) {
-    auto t0 = Clock::now();
-    SearchStats st;
-    const int K = static_cast<int>(roots.size());
-    if (K == 0) throw std::invalid_argument("no roots");
-    if (cfg.batch <= 0 || cfg.nSims <= 0) throw std::invalid_argument("n_sims and batch must be positive");
+namespace {
 
-    std::vector<float> rp(rootPriors, rootPriors + N_ACTIONS);
-    std::vector<bool> rl(rootLegal, rootLegal + N_ACTIONS);
-    std::vector<TreeData> trees(K);
-    for (int k = 0; k < K; k++) {
-        TreeData& t = trees[k];
-        t.tree = std::make_unique<MctsTree>(N_ACTIONS, cfg.cPuct, cfg.virtualLoss);
-        t.tree->select(1);
-        t.tree->expand(0, rp, rl);
-        t.tree->backup(0, rootValue);
-        t.grow(1);
-        // the root's state is the caller's (not copied): it is only cloned from
-        t.states[0].game.reset();
-        t.states[0].decisions = roots[k].decisions;
-    }
-    auto rootGame = [&](int k) -> Gen3Game& { return *roots[k].game; };
-    auto rootObs = [&](int k) -> NodeObs& { return *roots[k].obs; };
-
-    const int budget = std::max(1, cfg.nSims / K);
-    const int per = std::max(1, cfg.batch / K);
-    std::vector<int> done(K, 1);
-    std::vector<Pending> pending;
+// The per-tree state of one search and the batch step shared by the PUCT and the Gumbel loops.
+struct Engine {
+    std::vector<SearchRoot>& roots;
+    const EncodeCtx& ctx;
+    float rootValue;
+    const SearchConfig& cfg;
+    const BatchEvaluator& evaluator;
+    SearchStats& st;
+    int K;
+    std::vector<TreeData> trees;
     std::vector<ToEval> toEval;
     std::vector<std::pair<int, int>> dups;
     std::vector<EncodedObs> enc;
     std::vector<float> pri, val;
     std::map<std::pair<int, int>, float> valueOf;
 
-    while (true) {
-        pending.clear();
-        for (int k = 0; k < K; k++) {
-            int n = std::min(per, budget - done[k]);
-            if (n > 0) {
-                auto sel = trees[k].tree->select(n);
-                done[k] = sel.empty() ? budget : done[k] + static_cast<int>(sel.size());
-                for (auto& [leaf, parent, act] : sel) pending.push_back({k, leaf, parent, act});
-            }
-        }
-        if (pending.empty()) break;
+    Engine(std::vector<SearchRoot>& r, const EncodeCtx& c, float rv, const SearchConfig& cf,
+           const BatchEvaluator& ev, SearchStats& s)
+        : roots(r), ctx(c), rootValue(rv), cfg(cf), evaluator(ev), st(s), K(static_cast<int>(r.size())) {}
 
+    void init(const float rootPriors[7], const bool rootLegal[7]) {
+        std::vector<float> rp(rootPriors, rootPriors + N_ACTIONS);
+        std::vector<bool> rl(rootLegal, rootLegal + N_ACTIONS);
+        trees.resize(K);
+        for (int k = 0; k < K; k++) {
+            TreeData& t = trees[k];
+            t.tree = std::make_unique<MctsTree>(N_ACTIONS, cfg.cPuct, cfg.virtualLoss);
+            if (cfg.gumbel) t.tree->setGumbelRule(cfg.gumbelNonRoot, cfg.cVisit, cfg.cScale, cfg.rescale);
+            t.tree->select(1);
+            t.tree->expand(0, rp, rl);
+            t.tree->backup(0, rootValue);
+            t.grow(1);
+            // the root's state is the caller's (not copied): it is only cloned from
+            t.states[0].game.reset();
+            t.states[0].decisions = roots[k].decisions;
+        }
+    }
+
+    // Expand / evaluate / back up the selected leaves (one network call for the new ones).
+    void process(const std::vector<Pending>& pending) {
         toEval.clear();
         dups.clear();
         for (const Pending& p : pending) {
@@ -181,8 +176,8 @@ SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, cons
                 continue;
             }
             const bool parentIsRoot = p.parent == 0;
-            Gen3Game& g0 = parentIsRoot ? rootGame(p.k) : *t.states[p.parent].game;
-            NodeObs& o0 = parentIsRoot ? rootObs(p.k) : *t.states[p.parent].obs;
+            Gen3Game& g0 = parentIsRoot ? *roots[p.k].game : *t.states[p.parent].game;
+            NodeObs& o0 = parentIsRoot ? *roots[p.k].obs : *t.states[p.parent].obs;
             int d0 = t.states[p.parent].decisions;
             auto g = std::make_unique<Gen3Game>(g0);
             auto obs = o0.clone();
@@ -245,19 +240,212 @@ SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, cons
         }
     }
 
-    double qsum[N_ACTIONS] = {};
-    for (int k = 0; k < K; k++) {
-        MctsTree& tree = *trees[k].tree;
-        auto vis = tree.rootVisits();
-        auto q = tree.rootQ();
-        for (int a = 0; a < N_ACTIONS; a++) {
-            st.visits[a] += static_cast<double>(vis[a]);
-            qsum[a] += static_cast<double>(q[a]) * static_cast<double>(vis[a]);
+    // Root visits summed over the trees and the visit-weighted mean Q (the value sums over the visits).
+    void aggregate(double visits[7], double q[7]) const {
+        double qsum[N_ACTIONS] = {};
+        for (int a = 0; a < N_ACTIONS; a++) visits[a] = 0.0;
+        for (int k = 0; k < K; k++) {
+            MctsTree& tree = *trees[k].tree;
+            auto vis = tree.rootVisits();
+            auto qq = tree.rootQ();
+            for (int a = 0; a < N_ACTIONS; a++) {
+                visits[a] += static_cast<double>(vis[a]);
+                qsum[a] += static_cast<double>(qq[a]) * static_cast<double>(vis[a]);
+            }
         }
-        st.nodes += tree.nodeCount();
+        for (int a = 0; a < N_ACTIONS; a++) q[a] = visits[a] > 0 ? qsum[a] / std::max(visits[a], 1e-9) : 0.0;
     }
-    for (int a = 0; a < N_ACTIONS; a++) st.q[a] = st.visits[a] > 0 ? qsum[a] / std::max(st.visits[a], 1e-9) : 0.0;
-    st.msTotal = msSince(t0);
+
+    void finish(Clock::time_point t0) {
+        aggregate(st.visits, st.q);
+        for (int k = 0; k < K; k++) st.nodes += trees[k].tree->nodeCount();
+        st.msTotal = msSince(t0);
+    }
+};
+
+// sigma(completed Q) at the root from the aggregated statistics (the transform of MctsTree::pickGumbel)
+void rootSigma(const double visits[7], const double q[7], const double prior[7], const bool legal[7], double vhat,
+               const SearchConfig& cfg, double out[7]) {
+    double sumN = 0, maxN = 0, sumPi = 0, sumPiQ = 0;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!legal[a]) continue;
+        sumN += visits[a];
+        maxN = std::max(maxN, visits[a]);
+        if (visits[a] > 0) {
+            sumPi += prior[a];
+            sumPiQ += prior[a] * q[a];
+        }
+    }
+    double vmix = sumPi > 0 ? (vhat + sumN * sumPiQ / sumPi) / (1.0 + sumN) : vhat;
+    double cq[N_ACTIONS] = {}, lo = INFINITY, hi = -INFINITY;
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!legal[a]) continue;
+        cq[a] = visits[a] > 0 ? q[a] : vmix;
+        lo = std::min(lo, cq[a]);
+        hi = std::max(hi, cq[a]);
+    }
+    for (int a = 0; a < N_ACTIONS; a++) {
+        double v = cfg.rescale ? (cq[a] - lo) / std::max(hi - lo, 1e-8) : cq[a];
+        out[a] = legal[a] ? (cfg.cVisit + maxN) * cfg.cScale * v : 0.0;
+    }
+}
+
+}  // namespace
+
+SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, const float rootPriors[7],
+                      const bool rootLegal[7], float rootValue, const SearchConfig& cfg,
+                      const BatchEvaluator& evaluator) {
+    auto t0 = Clock::now();
+    SearchStats st;
+    const int K = static_cast<int>(roots.size());
+    if (K == 0) throw std::invalid_argument("no roots");
+    if (cfg.batch <= 0 || cfg.nSims <= 0) throw std::invalid_argument("n_sims and batch must be positive");
+    if (cfg.gumbel) throw std::invalid_argument("runSearch is the PUCT loop: use runGumbelSearch");
+
+    Engine eng(roots, ctx, rootValue, cfg, evaluator, st);
+    eng.init(rootPriors, rootLegal);
+
+    const int budget = std::max(1, cfg.nSims / K);
+    const int per = std::max(1, cfg.batch / K);
+    std::vector<int> done(K, 1);
+    std::vector<Pending> pending;
+    while (true) {
+        pending.clear();
+        for (int k = 0; k < K; k++) {
+            int n = std::min(per, budget - done[k]);
+            if (n > 0) {
+                auto sel = eng.trees[k].tree->select(n);
+                done[k] = sel.empty() ? budget : done[k] + static_cast<int>(sel.size());
+                for (auto& [leaf, parent, act] : sel) pending.push_back({k, leaf, parent, act});
+            }
+        }
+        if (pending.empty()) break;
+        eng.process(pending);
+    }
+    eng.finish(t0);
+    return st;
+}
+
+std::vector<int> halvingPlan(int m, int nSims) {
+    std::vector<int> out;
+    if (m <= 0) return out;
+    int phases = 1;
+    while ((1 << phases) < m) phases++;
+    int used = 0, r = m;
+    for (int p = 0; p < phases; p++) {
+        int b = p == phases - 1 ? nSims - used : nSims / phases;
+        int per = std::max(1, b / r);
+        out.push_back(per);
+        used += per * r;
+        r = (r + 1) / 2;
+    }
+    return out;
+}
+
+SearchStats runGumbelSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, const float rootPriors[7],
+                            const bool rootLegal[7], float rootValue, const float gumbel[7],
+                            const SearchConfig& cfg, const BatchEvaluator& evaluator) {
+    auto t0 = Clock::now();
+    SearchStats st;
+    const int K = static_cast<int>(roots.size());
+    if (K == 0) throw std::invalid_argument("no roots");
+    if (cfg.batch <= 0 || cfg.nSims <= 0) throw std::invalid_argument("n_sims and batch must be positive");
+    if (!cfg.gumbel) throw std::invalid_argument("runGumbelSearch needs cfg.gumbel");
+
+    // the root prior normalized over the legal actions (as MctsTree::expand); logits = log prior
+    double prior[N_ACTIONS] = {}, logit[N_ACTIONS] = {}, psum = 0;
+    int nLegal = 0;
+    for (int a = 0; a < N_ACTIONS; a++)
+        if (rootLegal[a]) {
+            nLegal++;
+            if (rootPriors[a] > 0 && std::isfinite(rootPriors[a])) psum += rootPriors[a];
+        }
+    if (nLegal == 0) throw std::invalid_argument("no legal root action");
+    for (int a = 0; a < N_ACTIONS; a++) {
+        if (!rootLegal[a]) continue;
+        prior[a] = psum > 0 ? ((rootPriors[a] > 0 && std::isfinite(rootPriors[a])) ? rootPriors[a] / psum : 0.0)
+                            : 1.0 / nLegal;
+        logit[a] = std::log(std::max(prior[a], 1e-30));
+    }
+
+    Engine eng(roots, ctx, rootValue, cfg, evaluator, st);
+    eng.init(rootPriors, rootLegal);
+
+    // Gumbel top-m
+    std::vector<int> remaining;
+    for (int a = 0; a < N_ACTIONS; a++)
+        if (rootLegal[a]) remaining.push_back(a);
+    std::stable_sort(remaining.begin(), remaining.end(),
+                     [&](int x, int y) { return gumbel[x] + logit[x] > gumbel[y] + logit[y]; });
+    const int m = std::min(static_cast<int>(remaining.size()), std::max(1, cfg.maxConsidered));
+    remaining.resize(m);
+    for (int a : remaining) st.considered[a] = 1;
+
+    std::vector<int> plan = halvingPlan(m, cfg.nSims);
+    const int per = std::max(1, cfg.batch / K);
+    std::vector<std::vector<int>> queue(K);
+    std::vector<Pending> pending;
+    std::vector<int> retry;
+    long rr = 0;                                     // round-robin over the trees
+    double visits[N_ACTIONS], q[N_ACTIONS], sigma[N_ACTIONS];
+    int used = 0;
+    for (size_t p = 0; p < plan.size(); p++) {
+        const int r = static_cast<int>(remaining.size());
+        const bool last = p + 1 == plan.size();
+        const int extra = last ? std::max(0, cfg.nSims - used - plan[p] * r) : 0;
+        // this phase: plan[p] simulations per survivor (one more for the first `extra` in rank order), dealt to
+        // the trees in turn
+        int phaseN = 0;
+        for (int i = 0; i < r; i++) {
+            int n = plan[p] + (i < extra ? 1 : 0);
+            for (int j = 0; j < n; j++) queue[(rr++) % K].push_back(remaining[i]);
+            phaseN += n;
+        }
+        used += phaseN;
+        st.phaseSims.push_back(phaseN);
+        // the queues in rounds of `per` selections per tree (one network call per round); a selection that
+        // collides with a leaf in flight waits for the next round
+        std::vector<size_t> head(K, 0);
+        while (true) {
+            pending.clear();
+            bool left = false;
+            for (int k = 0; k < K; k++) {
+                auto& qk = queue[k];
+                retry.clear();
+                int taken = 0;
+                while (head[k] < qk.size() && taken < per) {
+                    int a = qk[head[k]++];
+                    auto sel = eng.trees[k].tree->selectForced(a);
+                    if (sel.empty()) {
+                        retry.push_back(a);
+                        continue;
+                    }
+                    taken++;
+                    auto& [leaf, parent, act] = sel[0];
+                    pending.push_back({k, leaf, parent, act});
+                }
+                if (!retry.empty()) qk.insert(qk.begin() + static_cast<long>(head[k]), retry.begin(), retry.end());
+                if (head[k] < qk.size()) left = true;
+            }
+            if (pending.empty()) {
+                // (cannot happen: the first selection of a tree in a round never collides)
+                st.errors++;
+                break;
+            }
+            eng.process(pending);
+            if (!left) break;
+        }
+        for (int k = 0; k < K; k++) queue[k].clear();
+        // rank the survivors by g + logit + sigma(completed Q); the better half goes on
+        eng.aggregate(visits, q);
+        rootSigma(visits, q, prior, rootLegal, rootValue, cfg, sigma);
+        std::stable_sort(remaining.begin(), remaining.end(), [&](int x, int y) {
+            return gumbel[x] + logit[x] + sigma[x] > gumbel[y] + logit[y] + sigma[y];
+        });
+        if (!last) remaining.resize((r + 1) / 2);
+    }
+    st.winner = remaining.empty() ? -1 : remaining[0];
+    eng.finish(t0);
     return st;
 }
 

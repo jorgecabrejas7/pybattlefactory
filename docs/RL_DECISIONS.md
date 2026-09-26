@@ -840,3 +840,106 @@ la ronda 5"), aceptado por el usuario; nunca información oculta de un rival con
 
 ### 19.4 Evaluación
 Red sola cada iteración; red + búsqueda legal de 512 simulaciones cada ~5 iteraciones.
+
+### 19.5 Implementación (`rl/alphazero_v2.py`, 2026-09-26)
+
+Punto de entrada **nuevo**, `python -m rl.alphazero_v2`, que reutiliza piezas de `rl/alphazero.py` (currículo,
+procesos de autojuego, buffer del combatiente, paso de entrenamiento del combatiente, evaluación). Motivo: v2 cambia
+el táctico de raíz (sin búsqueda, PPO en vez de imitar una búsqueda), así que meterlo tras *flags* en `rl.alphazero`
+llenaría v1 de ramas; con un archivo aparte, `python -m rl.alphazero` sigue siendo exactamente alphazero_v1. Los
+cambios en archivos compartidos no alteran v1 (tests de v1 y de la búsqueda C++ intactos).
+
+**Combatiente: raíz Gumbel en C++** (`Searcher.search_gumbel`, `src/gen3/search.cpp`; Python en `rl/gumbel.py`).
+Términos, de abajo arriba:
+- **logits** de la raíz: log de la política de la red (la *prior*), normalizada sobre las acciones legales.
+- **Ruido de Gumbel** g(a): un número aleatorio por acción (distribución de Gumbel). Sumar g a los logits y quedarse
+  con el máximo equivale a sortear una acción de la prior; así se explora sin temperatura ni Dirichlet.
+- **Top-m**: se consideran las m = min(legales, 16) acciones con mayor g + logits. En el combate hay como mucho 7
+  acciones, así que se consideran todas las legales; el ruido sigue importando en el desempate y en el ganador.
+- **Q completado**: para cada acción, su Q de la búsqueda si se visitó; si no, **v_mix**, una mezcla del valor de la
+  red en ese nodo con la media, ponderada por la prior, de los Q de las acciones visitadas (ec. 33 del artículo).
+- **σ(q)** = (c_visit + máx. de visitas) · c_scale · q, con c_visit = 50 y c_scale = 0,1, y q reescalado a [0, 1]
+  con mínimo y máximo sobre las acciones legales del nodo (el valor por defecto de mctx). Cuantas más visitas, más
+  pesa la búsqueda frente a la prior.
+- **Sequential halving** (reparto por mitades): ⌈log₂ m⌉ fases; cada fase gasta 256 / fases simulaciones repartidas
+  a partes iguales entre las acciones que quedan (la última fase se lleva lo que sobre); tras cada fase se ordenan por
+  g + logits + σ(Q̂) y pasa la mejor mitad. Con 6 acciones legales: 14 simulaciones cada una, luego 28 a las 3
+  mejores, luego 44 a las 2 mejores (84 + 84 + 88 = 256). La **ganadora** es la última que queda.
+- **Con K = 8 determinizaciones**: las simulaciones de cada acción se reparten por turnos entre los 8 árboles; Q̂ de
+  una acción = suma de valores / suma de visitas de su hijo en los 8 árboles (media ponderada por visitas). Las
+  decisiones del halving usan ese Q̂ agregado. `redraw_turn`, el muestreador `factory_sets` en entrenamiento y el
+  estricto en evaluación, y el candado de información perfecta se mantienen igual (`_roots` de `SearchBattler`).
+- **Debajo de la raíz** (`--non-root gumbel`, por defecto): la regla determinista del artículo, elegir
+  argmax π′(a) − N(a) / (1 + Σ N), con π′ = softmax(logits + σ(Q completado)) de ese nodo; las selecciones en vuelo
+  cuentan como visitas de valor 0 (la misma pérdida virtual que PUCT), para poder evaluar hojas en lotes.
+  `--non-root puct` deja PUCT debajo de la raíz. Se eligió la regla del artículo porque con pocas simulaciones por
+  árbol (~30 por acción) es la que el artículo recomienda y en C++ cuesta lo mismo.
+- **Autojuego**: se juega la ganadora (sin temperatura, sin Dirichlet). **Objetivo de política**:
+  softmax(logits + σ(Q completado)) sobre las legales. **Objetivo de valor**: ½ z + ½ q_raíz (sin cambios; z sale
+  ahora de partidas jugadas a su nivel real).
+- Una sola acción legal: no se busca (política one-hot, valor z), como en v1.
+- **Velocidad** (18 procesos + servidor GPU, checkpoint de v1, máquina compartida con carga ~8, 150 decisiones por
+  proceso; `python -m rl.az_bench --v2`):
+
+  | | ms por decisión del combatiente | decisiones del combatiente / s |
+  |---|---|---|
+  | v1 (PUCT 128 + búsqueda del táctico) | 24,6 | 211 (≈290 con la máquina libre) |
+  | v1 con PUCT 256 | 42,3 | 171 |
+  | **v2 (Gumbel 256, regla del artículo)** | 42,8 | **388** |
+  | v2 con PUCT debajo de la raíz | 41,9 | 396 |
+
+  La raíz Gumbel cuesta lo mismo que PUCT con el mismo número de simulaciones; el autojuego va más rápido que v1
+  porque el táctico ya no simula combates (antes era el 53 % del tiempo de los procesos).
+
+**Táctico híbrido.**
+- **Red**: `FactoryNet(..., opt_feat=4)` recibe `opt_feat` por opción: [E_ronda, W(normal), W(último o Noland), Δ]
+  del equipo resultante (§19.2). Un MLP pequeño f de esas 4 cifras se suma al logit de cada opción; su media y su
+  máximo sobre las opciones legales entran al crítico (capa lineal iniciada a cero). Sin `opt_feat` en la entrada, o
+  con la red de v1, todo es como antes; un `state_dict` de v1 carga en la red nueva.
+- **Alquiler (cabeza factorizada)**: una opción es (primero, pareja) y sus rasgos van a la celda [primero, pareja].
+  Para que la política conjunta sea exactamente π(l, p) ∝ π₀(l) · π₀(p | l) · e^{f(l, p)} se suma f(l, p) a los
+  logits de pareja de la fila l y log Σ_p π₀(p | l) e^{f(l, p)} al logit del primero l. Así `rental()` (sortear el
+  primero y luego la pareja) y `rental_joint()` dan la misma distribución (test).
+- **Rasgos en el entorno** (`rl/tactician_features.py`): en cada alquiler / intercambio se enumeran las opciones como
+  el espacio de acciones (`options_of`) y se llama a `option_features(ev, view, kind, ctx, options, v_next)` del
+  evaluador; sin `--team-eval`, ceros. `FactoryEnv(obs_hook=...)` los añade también en las evaluaciones.
+- **Q_eval y π_eval**: Q_eval(opción) = E_ronda + W_n^(7−k) · W_l · V_siguiente (Φ del estado resultante, a partir
+  de los rasgos; k = siguiente combate de la ronda); π_eval = softmax(Q_eval / T), T = `--t-eval-temp` (0,5 victorias,
+  provisional).
+- **Shaping**: r = victorias desde la decisión anterior + Φ(s′) − Φ(s), γ = 1, Φ(fin de la racha) = 0, con
+  Φ = `phi()` del evaluador. La suma de las recompensas de una racha es victorias − Φ(s₀) (test). Un combate cortado
+  por las 300 decisiones cierra la racha con el valor estimado de lo que faltaba.
+- **V_siguiente**: tabla por ronda de victorias medias desde el inicio de la ronda r hasta el final de la racha, con
+  los resultados del autojuego; media móvil por iteración (ritmo `--v-next-rate` 0,3; la primera observación se toma
+  tal cual). Se guarda en el checkpoint y se registra en `v_next/round_r`.
+- **PPO** (definido en §7): solo con las muestras de la iteración en curso, `--t-ppo-epochs` 4 épocas, recorte 0,2,
+  ventajas GAE (λ 0,95, γ 1) sobre las recompensas con shaping, valor con `ValueNorm`, bonus de entropía 0,01, más
+  `--t-imitation` × CE(π_eval, π_red) (0 por defecto, hasta que la validación del evaluador diga que π_eval gana más
+  que la red). La decisión que queda abierta al acabar la iteración solo sirve de *bootstrap* a las anteriores y no
+  se entrena nunca (su log-prob es de la copia anterior de la red). El combatiente mantiene su buffer de 4
+  iteraciones. Las dos partes comparten el optimizador (AdamW) y la tasa de aprendizaje coseno.
+
+**Evaluación**: red sola cada iteración (`eval_round_k/*`, con los rasgos del táctico); red + búsqueda legal PUCT de
+512 simulaciones con el muestreador estricto cada 5 iteraciones (`eval_search_round_k/*`, 64 rachas por ronda,
+comparable con la tabla de §18b). Productos: `eval/product_complete`, `eval_search/product_complete`.
+
+**Registros nuevos**: `gumbel/*` (entropía del objetivo, KL(objetivo ‖ prior), fracción en que la ganadora ≠ argmax
+de la prior o del objetivo, acciones consideradas); `tactician/*` (pérdidas, *clip frac*, KL aproximada, entropía,
+desviación de las ventajas, media y desviación de la recompensa con shaping, Φ medio, CE de imitación, fracción en
+que la red elige el argmax de Q_eval, varianza explicada en entrenamiento y validación); `v_next/*`. Se mantienen los
+de v1 que siguen teniendo sentido (`battler/*`, `search/*`, `perf/*`, `train/*`, `curriculum/*`); `tsearch/*` ya no.
+
+**Interfaz esperada del evaluador** (`rl/team_eval.py`, en paralelo; `rl/team_eval_stub.py` la imita para los
+tests): `TeamEvaluator.load(path, device)` (de clase o de instancia), `option_features` con las opciones en el
+formato de `options_of` y `ctx` = `run_ctx` (`battle` = combates ganados en la ronda, `challenge` = rondas
+completadas), y `phi(ev, view, kind, ctx, v_next)`.
+
+Comando:
+
+```bash
+python -m rl.alphazero_v2 --name alphazero_v2 --team-eval runs/team_eval/latest.pt   # valores por defecto = los de arriba
+python -m rl.az_bench --v2 --workers 18 --decisions 200                             # velocidad de autojuego
+```
+
+**Pendiente de decidir**: T de π_eval (0,5) y el coeficiente de imitación (0 hasta la validación); el ritmo de
+V_siguiente (0,3); lote de PPO del táctico (256) y coeficiente de valor (1).
