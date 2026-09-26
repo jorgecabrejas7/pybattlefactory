@@ -83,7 +83,7 @@ _RNG = S.addr("gRngValue")
 
 # ---- the perfect-information guard ----------------------------------------------------------------------------
 TRAINING_ENV = "PYB_TRAINING"
-_TRAINING_MAINS = ("rl.train", "rl.train_rainbow", "rl.alphazero")
+_TRAINING_MAINS = ("rl.train", "rl.train_rainbow", "rl.alphazero", "rl.alphazero_v2")
 
 
 def mark_training():

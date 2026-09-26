@@ -123,6 +123,27 @@ struct Searcher {
 
     py::dict search(const py::list& roots, const py::object& ctx, const std::vector<float>& rootPriors,
                     const std::vector<bool>& rootLegal, float rootValue, const py::function& evaluator) {
+        return run(roots, ctx, rootPriors, rootLegal, rootValue, evaluator, nullptr, cfg);
+    }
+
+    py::dict searchGumbel(const py::list& roots, const py::object& ctx, const std::vector<float>& rootPriors,
+                          const std::vector<bool>& rootLegal, float rootValue, const py::function& evaluator,
+                          const std::vector<float>& gumbel, int maxConsidered, float cVisit, float cScale,
+                          bool rescale, bool gumbelNonRoot) {
+        if (gumbel.size() != 7) throw std::invalid_argument("gumbel needs 7 entries");
+        SearchConfig c = cfg;
+        c.gumbel = true;
+        c.maxConsidered = maxConsidered;
+        c.cVisit = cVisit;
+        c.cScale = cScale;
+        c.rescale = rescale;
+        c.gumbelNonRoot = gumbelNonRoot;
+        return run(roots, ctx, rootPriors, rootLegal, rootValue, evaluator, gumbel.data(), c);
+    }
+
+    py::dict run(const py::list& roots, const py::object& ctx, const std::vector<float>& rootPriors,
+                 const std::vector<bool>& rootLegal, float rootValue, const py::function& evaluator,
+                 const float* gumbel, const SearchConfig& cfg) {
         if (rootPriors.size() != 7 || rootLegal.size() != 7)
             throw std::invalid_argument("root priors and legal need 7 entries");
         // No true hidden information in training (rl/search.py mark_training): every root must be a full
@@ -183,7 +204,8 @@ struct Searcher {
                 val[i] = std::min(1.0f, std::max(0.0f, val[i]));
             }
         };
-        SearchStats st = runSearch(rs, c, rp, rl, rootValue, cfg, ev);
+        SearchStats st = gumbel ? runGumbelSearch(rs, c, rp, rl, rootValue, gumbel, cfg, ev)
+                                : runSearch(rs, c, rp, rl, rootValue, cfg, ev);
         py::dict out;
         out["visits"] = std::vector<double>(st.visits, st.visits + 7);
         out["q"] = std::vector<double>(st.q, st.q + 7);
@@ -196,6 +218,11 @@ struct Searcher {
         out["ms"] = st.msTotal;
         out["ms_eval"] = st.msEval;
         out["ms_cpp"] = st.msTotal - st.msEval;
+        if (gumbel) {
+            out["winner"] = st.winner;
+            out["considered"] = std::vector<bool>(st.considered, st.considered + 7);
+            out["phase_sims"] = st.phaseSims;
+        }
         return out;
     }
 };
@@ -228,11 +255,21 @@ void bind_search(py::module_& m) {
              "evaluator(batch: dict of numpy arrays as rl.encode.collate stacks them) -> (priors [B,7], values [B]). "
              "-> {'visits', 'q', 'leaves', 'nodes', 'net_calls', 'errors', 'max_depth', 'mean_depth', 'ms', 'ms_eval', "
              "'ms_cpp'}")
+        .def("search_gumbel", &Searcher::searchGumbel, py::arg("roots"), py::arg("ctx"), py::arg("root_priors"),
+             py::arg("root_legal"), py::arg("root_value"), py::arg("evaluator"), py::arg("gumbel"),
+             py::arg("max_considered") = 16, py::arg("c_visit") = 50.0f, py::arg("c_scale") = 0.1f,
+             py::arg("rescale") = true, py::arg("gumbel_non_root") = true,
+             "Gumbel AlphaZero root over the same trees (runGumbelSearch): n_sims simulations in total, Gumbel top-m "
+             "(g + log prior) and sequential halving; below the root the deterministic Gumbel rule "
+             "(gumbel_non_root) or PUCT. -> search()'s dict + 'winner' (the action to play), 'considered' [7], "
+             "'phase_sims'")
         .def_property_readonly("n_sims", [](const Searcher& s) { return s.cfg.nSims; })
         .def_property_readonly("batch", [](const Searcher& s) { return s.cfg.batch; })
         .def_property_readonly("c_puct", [](const Searcher& s) { return s.cfg.cPuct; })
         .def_property_readonly("virtual_loss", [](const Searcher& s) { return s.cfg.virtualLoss; })
         .def_property_readonly("max_decisions", [](const Searcher& s) { return s.cfg.maxDecisions; });
+    m.def("halving_plan", &halvingPlan, py::arg("m"), py::arg("n_sims"),
+          "Sequential halving: simulations per surviving action in each phase (ceil(log2 m) phases).");
     m.def("has_choice", [](Gen3Game& g) { return hasChoice(g); }, py::arg("game"),
           "At an ACTION decision: a usable move or a switch target exists (else FactoryEnv plays move 0).");
 }

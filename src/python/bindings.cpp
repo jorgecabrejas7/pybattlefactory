@@ -313,6 +313,11 @@ PYBIND11_MODULE(pybattle_native, m) {
         .def("expand", &MctsTree::expand, py::arg("node"), py::arg("priors"), py::arg("legal"))
         .def("set_terminal", &MctsTree::setTerminal, py::arg("node"), py::arg("value"))
         .def("select", &MctsTree::select, py::arg("k"))
+        .def("select_forced", &MctsTree::selectForced, py::arg("action"),
+             "Gumbel mode: one simulation through root action `action` ([] on a collision)")
+        .def("set_gumbel_rule", &MctsTree::setGumbelRule, py::arg("gumbel"), py::arg("c_visit") = 50.0f,
+             py::arg("c_scale") = 0.1f, py::arg("rescale") = true)
+        .def("net_value", &MctsTree::netValue, py::arg("node"))
         .def("backup", &MctsTree::backup, py::arg("node"), py::arg("value"))
         .def("root_visits", &MctsTree::rootVisits)
         .def("root_q", &MctsTree::rootQ)

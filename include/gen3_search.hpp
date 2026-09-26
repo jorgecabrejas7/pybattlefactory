@@ -86,6 +86,14 @@ struct SearchConfig {
     float cPuct = 1.5f;
     float virtualLoss = 1.0f;
     int maxDecisions = 300;
+    // Gumbel root (runGumbelSearch, alphazero_v2): Gumbel top-m + sequential halving over the root actions,
+    // non-root rule gumbelNonRoot ? the deterministic Gumbel rule : PUCT (MctsTree::setGumbelRule)
+    bool gumbel = false;
+    int maxConsidered = 16;
+    bool gumbelNonRoot = true;
+    float cVisit = 50.0f;
+    float cScale = 0.1f;
+    bool rescale = true;
 };
 
 struct SearchStats {
@@ -100,6 +108,10 @@ struct SearchStats {
     int depthCount = 0;
     double msTotal = 0.0;          // whole search
     double msEval = 0.0;           // inside the evaluator
+    // Gumbel search only
+    int winner = -1;               // the sequential-halving survivor (the action to play)
+    uint8_t considered[7] = {};    // the Gumbel top-m
+    std::vector<int> phaseSims;    // simulations run in each halving phase
 };
 
 // batch of B observations -> priors [B*7] (softmax, any mask), values [B] in [0, 1]
@@ -112,5 +124,19 @@ bool hasChoice(Gen3Game& game);
 SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, const float rootPriors[7],
                       const bool rootLegal[7], float rootValue, const SearchConfig& cfg,
                       const BatchEvaluator& evaluator);
+
+// Gumbel AlphaZero root (Danihelka et al. 2022) over the same K determinized trees: the m = min(legal,
+// maxConsidered) actions with the largest g + log prior are considered; nSims simulations in
+// ceil(log2 m) phases of sequential halving (halvingPlan: nSims / phases per phase, split evenly over
+// the survivors; the last phase takes what is left, its remainder going one each to the best-ranked),
+// each survivor's simulations dealt to the trees in turn; after each phase the survivors are ranked
+// by g + log prior + sigma(completed Q) (Q aggregated over the trees, visit-weighted) and the better
+// half kept. stats.winner is the last survivor. `gumbel` holds g(a) (the caller draws it).
+SearchStats runGumbelSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, const float rootPriors[7],
+                            const bool rootLegal[7], float rootValue, const float gumbel[7],
+                            const SearchConfig& cfg, const BatchEvaluator& evaluator);
+
+// Simulations per surviving action in each phase of sequential halving over m actions.
+std::vector<int> halvingPlan(int m, int nSims);
 
 }  // namespace pkmn
