@@ -331,7 +331,7 @@ def main(argv=None):
         teams += nt
         battles += nb
         steps[wid] = (st, err)
-        if time.time() - last > 60 or alive < a.workers:
+        if (time.time() - last > 60 and len(steps) == a.workers) or alive < a.workers:
             el = time.time() - t0
             print(f"[{el / 60:.1f} min] {teams:,} teams, {battles:,} battles ({battles / el:.0f} battles/s, "
                   f"{sum(s for s, _ in steps.values()) / el:.0f} decisions/s), errors "
