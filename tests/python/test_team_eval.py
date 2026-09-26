@@ -110,6 +110,7 @@ def test_battle_types():
     assert [T.battle_types(r)[6] for r in (2, 4, 5, 7, 8, 9, 12)] == [T.LAST] * 5 + [T.NOLAND] * 2
     assert T.round_of({"streak": 0}) == (1, 1) and T.round_of({"streak": 20}) == (3, 7)
     assert T.round_of({"streak": 13}) == (2, 7) and T.round_of({"streak": 14}) == (3, 1)
+    assert T.round_of({"streak": 99, "challenge": 2, "battle": 4}) == (3, 5)      # run_ctx's fields win
 
 
 def test_round_values_on_hand_made_w():
@@ -265,3 +266,21 @@ def test_make_case_builds_the_recorded_team(round_type):
     assert all(m.species for m in foe)
     iv = DET.fixed_iv(r + 1, False) if t == 2 else DET.fixed_iv(0, t == 1)
     assert all(set(m.ivs) == {iv} for m in foe)
+
+
+def test_q_eval_of_the_trainer_matches_phi():
+    """rl/tactician_features.q_eval_from_features (E_round + W_n^(7-k) W_l v_next) is Phi of the option's state."""
+    from rl import tactician_features as TF
+    ev = _evaluator(3)
+    for kind, streak in (("rental", 14), ("swap", 14), ("swap", 7)):
+        b, v, ctx, obs = _decision(kind, 7, streak=streak)
+        opts = options_of(kind, obs)
+        f = T.option_features(ev, v, kind, ctx, opts, 4.0)
+        assert np.allclose(TF.q_eval_from_features(f, ctx, 4.0), T.phi_options(ev, v, kind, ctx, opts, 4.0),
+                           atol=1e-4)
+        tf = TF.TeamFeatures("unused", "rl.team_eval")
+        tf._mod, tf._ev = T, ev
+        tf.set_v_next([4.0] * 12)
+        out = tf.compute(b, kind, obs, ctx)
+        assert np.allclose(out["q_eval"], T.phi_options(ev, v, kind, ctx, opts, 4.0), atol=1e-4)
+        assert np.isclose(out["phi"], T.phi(ev, v, kind, ctx, 4.0))

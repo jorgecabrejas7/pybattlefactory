@@ -282,6 +282,15 @@ class TeamNet(nn.Module):
 
 # ---- the evaluator -------------------------------------------------------------------------------------------------------
 
+def _single_thread_in_children():
+    """In a worker process (forked FactoryEnv / pool workers), torch must not enter the intra-op thread pool it
+    inherited from a parent that already used it: that deadlocks (seen in rl.eval_rounds' VecEnv workers while
+    building the network). A few teams per call need one thread anyway. The main process is left alone."""
+    import multiprocessing as mp
+    if mp.parent_process() is not None and torch.get_num_threads() != 1:
+        torch.set_num_threads(1)
+
+
 class TeamEvaluator:
     """W(team, round, type) from a trained TeamNet (CPU by default: a few teams per decision)."""
 
@@ -292,6 +301,7 @@ class TeamEvaluator:
 
     @classmethod
     def load(cls, path, device="cpu") -> "TeamEvaluator":
+        _single_thread_in_children()
         ck = torch.load(path, map_location="cpu", weights_only=False)
         if ck.get("encode_version") != ENCODE_VERSION:
             raise ValueError(f"team encoding version {ck.get('encode_version')} != {ENCODE_VERSION}")
@@ -308,6 +318,7 @@ class TeamEvaluator:
 
     @torch.no_grad()
     def w_features(self, ids, num, rounds):
+        _single_thread_in_children()
         rnd = round_index(np.broadcast_to(np.asarray(rounds), (len(ids),)))
         x = [torch.from_numpy(np.ascontiguousarray(a)).to(self.device) for a in (ids, num, rnd)]
         return torch.sigmoid(self.net(*x).float()).cpu().numpy().astype(np.float64)
@@ -324,7 +335,11 @@ class TeamEvaluator:
 # ---- rounds: E_round, P(complete), Phi ------------------------------------------------------------------------------------
 
 def round_of(ctx):
-    """(round 1.., k 1..7) of the next battle from the streak context (rl.search.run_ctx)."""
+    """(round 1.., k 1..7) of the next battle from the streak context (rl.search.run_ctx / FactoryEnv._ctx):
+    "challenge" = rounds completed, "battle" = battles already won in this round (the convention rl/alphazero_v2
+    and rl/tactician_features.py use); a ctx with only "streak" is read as streak // 7, streak % 7."""
+    if "challenge" in ctx and "battle" in ctx:
+        return int(ctx["challenge"]) + 1, int(ctx["battle"]) + 1
     s = int(ctx["streak"])
     return s // 7 + 1, s % 7 + 1
 
@@ -589,7 +604,7 @@ def train(argv=None):
             nn.utils.clip_grad_norm_(net.parameters(), 1.0)
             opt.step()
             sched.step()
-            tot += float(loss) * float(pl.sum())
+            tot += float(loss.detach()) * float(pl.sum())
             cnt += float(pl.sum())
         net.eval()
         ho = evaluate_heldout(ev, d, held, np.random.default_rng(123))
