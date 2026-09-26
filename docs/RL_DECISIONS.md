@@ -943,3 +943,67 @@ python -m rl.az_bench --v2 --workers 18 --decisions 200                         
 
 **Pendiente de decidir**: T de π_eval (0,5) y el coeficiente de imitación (0 hasta la validación); el ritmo de
 V_siguiente (0,3); lote de PPO del táctico (256) y coeficiente de valor (1).
+
+### 19.6 Refresco periódico de W durante alphazero_v2, y plan para después (`rl/team_eval_refresh.py`, 2026-09-26)
+
+Definiciones, de abajo arriba:
+- **W** (§19.2) es la probabilidad de que **nuestro** combatiente gane un combate con un equipo. Se entrenó con
+  combates jugados por el combatiente de v1. El combatiente de v2 cambia al entrenar, así que la W fija se va quedando
+  desfasada: describe a un combatiente que ya no es el nuestro.
+- **Refrescar W**: volver a ajustarla con combates jugados por el combatiente actual.
+- **Ajuste fino** (*fine-tuning*): seguir entrenando una red desde sus pesos actuales, con pocas épocas y una tasa
+  de aprendizaje más baja, en vez de entrenarla desde cero.
+- **Mezcla de parámetros**: la red nueva es α · (red ajustada) + (1 − α) · (red anterior), peso a peso.
+- **Conjunto de sondeo** (*probe*): 1.024 equipos fijos (siempre los mismos, semilla fija) en los que se mide cuánto
+  se mueve W en cada refresco: la media de |ΔW|.
+
+**Cuándo** (`RefreshSchedule`): W empieza fija, la de `--team-eval` (entrenada con v1). Los refrescos empiezan
+cuando el combatiente de v2 juega al menos como el de v1: la media de las 3 últimas evaluaciones «red sola» de la
+media sobre las rondas 1–6 de P(completar la ronda) alcanza la media de la referencia (`--w-refresh-after`, por
+defecto la fila «AZ v1, red sola» de §18b: 66,0 / 66,8 / 41,8 / 56,6 / 21,1 / 19,5 %, media 45,3 %). Desde ese
+momento se refresca en la misma iteración y luego cada `--w-refresh-every` = 20 iteraciones.
+
+**Cómo** (al final de la iteración, con el autojuego parado):
+1. **Datos**: `--w-refresh-battles` = 4 M combates simulados nuevos (≈ 10 min con 18 procesos) jugados por la copia
+   actual del combatiente, con el mismo generador y la misma distribución de equipos y rivales que los datos
+   originales (`rl/team_eval_data.Generator`, 16 combates por equipo; los procesos de autojuego lo ejecutan con su
+   cliente del servidor GPU). Además, los combates **reales** del autojuego de las últimas 5 iteraciones (equipo tal
+   como lo conoce el jugador, ronda, tipo de combate y resultado; `RealBattleLog`, cuesta un `decode_party` por
+   combate). Son ~0,3 % de los datos. Ojo: esos combates se juegan con la búsqueda Gumbel y con los equipos que elige
+   el táctico, no con la red sola y equipos al azar como los simulados; con ese peso apenas influyen.
+2. **Ajuste fino** de una copia de W desde sus pesos actuales: 2 épocas, tasa 2·10⁻⁴ con coseno, la misma pérdida
+   binomial que el entrenamiento original. El 5 % de los equipos nuevos se aparta para medir.
+3. **Mezcla de parámetros** con α = 0,5 (`--w-refresh-alpha`). Se eligió mezclar parámetros y no salidas porque las
+   dos redes parten de los mismos pesos y el ajuste es corto, así que su media es una red intermedia (lo comprueban
+   las métricas tras mezclar y el |ΔW| del sondeo); se guarda una sola red (el coste del evaluador no crece), y los
+   refrescos sucesivos son una media móvil exponencial de los pesos. Mezclar salidas obligaría a guardar y evaluar
+   todas las redes anteriores.
+4. Se guarda `runs/<nombre>/team_eval_<iteración>.pt` (escritura atómica), y los procesos de autojuego y la
+   evaluación la cargan desde la siguiente decisión del táctico.
+
+**Registros** (`w_refresh/*`): combates simulados y reales, segundos (generación y total), BCE, Brier y AUC por
+combate en los equipos apartados con la W anterior (`*_before`), la ajustada (`*_finetuned`) y la mezclada
+(`*_after`); |ΔW| medio en el sondeo; `trigger_mean_complete`, `armed` y `count`.
+
+**Checkpoints y reanudación**: cada checkpoint guarda la W en uso (`team_eval`) y el estado del calendario
+(`w_refresh`: historial, iteración de arranque, último refresco). `ckpt_<pasos>.pt` se escribe antes del refresco
+de su iteración (la W que usó su autojuego) y `latest.pt` después. Con `--init-from` se recupera la W y el calendario.
+
+**Φ cambia en cada refresco.** La garantía de Ng et al. (el shaping F = Φ(s′) − Φ(s) no cambia la política óptima)
+es exacta solo si Φ es fija. Si Φ cambia, cada trozo de trayectoria entre dos refrescos sigue cumpliendo la suma
+telescópica con su propia Φ, pero el objetivo que optimiza PPO cambia un poco en cada refresco. La mezcla con α = 0,5
+y los refrescos espaciados (20 iteraciones) hacen que el cambio sea pequeño (se vigila con |ΔW| del sondeo). Además,
+las muestras de PPO solo se usan en la iteración en que se generan, así que nunca se mezclan recompensas de dos Φ
+distintas en una misma actualización.
+
+**Plan acordado con el usuario para después de v2:**
+- **Etapa 2**: congelar el combatiente de v2; reentrenar W desde cero con él (W_final); entrenar **solo el táctico**
+  con W_final fija. Ahora el problema es estacionario (ni el combatiente ni Φ cambian), así que la garantía de Ng es
+  exacta.
+- **Etapa 3 (opcional)**: congelar el táctico y ajustar el combatiente con los equipos que elige; y alternar.
+
+Comando (igual que en §19.5; los valores por defecto activan el refresco):
+
+```bash
+python -m rl.alphazero_v2 --name alphazero_v2 --team-eval runs/team_eval_v1/model.pt
+```

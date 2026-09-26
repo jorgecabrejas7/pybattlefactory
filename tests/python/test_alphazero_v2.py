@@ -457,3 +457,141 @@ def test_tiny_run_end_to_end(tmp_path, monkeypatch):
     b, obs = _tactician_obs("rental", 1)
     a = pol.act("rental", encode.collate([dict(obs, opt_feat=np.zeros((6, 15, 4), np.float32))], "cpu"))
     assert a.shape == (1, 2)
+
+
+# ---- periodic refresh of the team evaluator W (rl/team_eval_refresh.py, docs §19.6) -------------------------------------
+
+from rl import team_eval_refresh as REF  # noqa: E402
+
+
+def _tiny_team_eval(path, seed=0):
+    from rl import team_eval as T
+    torch.manual_seed(seed)
+    T.TeamEvaluator(T.TeamNet(d=32, d_emb=8, layers=1)).save(str(path))
+    return str(path)
+
+
+def test_refresh_trigger():
+    ref = REF.parse_reference("66.0,66.8,41.8,56.6,21.1,19.5")
+    assert np.isclose(ref[1], 0.66) and len(ref) == 6
+    assert REF.parse_reference("none") is None and REF.parse_reference("0") == {}
+    s = REF.RefreshSchedule(ref, every=20, window=3)
+    target = np.mean(list(ref.values()))
+    low = {k: v - 0.05 for k, v in ref.items()}
+    high = {k: v + 0.02 for k, v in ref.items()}
+    for it in range(5):
+        s.observe(it, low)
+        assert not s.due(it)
+    s.observe(5, high)
+    s.observe(6, high)
+    assert s.armed_it is None                    # mean of the last 3: (low + 2 high) / 3 < reference
+    s.observe(7, {k: v + 0.2 for k, v in ref.items()})
+    assert s.armed_it == 7 and s.running_mean() >= target
+    assert s.due(7)
+    s.done(7)
+    assert not s.due(8) and not s.due(26) and s.due(27)
+    # only the rounds evaluated are compared (with the same rounds of the reference)
+    s2 = REF.RefreshSchedule(ref, every=1, window=1)
+    s2.observe(0, {3: 0.5})
+    assert s2.armed_it == 0
+    s3 = REF.RefreshSchedule(None, every=20)
+    s3.observe(0, high)
+    assert not s3.enabled and not s3.due(0)
+    s4 = REF.RefreshSchedule(ref, every=20, window=3)
+    s4.load(s.state())
+    assert s4.armed_it == 7 and s4.last_it == 7 and s4.count == 1 and s4.due(27) and not s4.due(26)
+
+
+def test_blend_params(tmp_path):
+    from rl import team_eval as T
+    a = T.TeamEvaluator.load(_tiny_team_eval(tmp_path / "a.pt", 0))
+    b = T.TeamEvaluator.load(_tiny_team_eval(tmp_path / "b.pt", 1))
+    for alpha, ref in ((0.0, a), (1.0, b)):
+        m = REF.blend_params(a, b, alpha)
+        for k, v in m.net.state_dict().items():
+            assert torch.allclose(v, ref.net.state_dict()[k]), k
+    m = REF.blend_params(a, b, 0.5)
+    k = next(n for n, _ in m.net.named_parameters())
+    assert torch.allclose(m.net.state_dict()[k], 0.5 * (a.net.state_dict()[k] + b.net.state_dict()[k]))
+
+
+def _refresh_args(te, extra=()):
+    return V2.parse(["--sims", "8", "--dets", "2", "--team-eval", te, "--w-refresh-battles", "48",
+                     "--w-refresh-battles-per-team", "4", "--w-refresh-concurrency", "16", "--w-refresh-probe", "8",
+                     "--w-refresh-real-iters", "0", "--w-refresh-epochs", "1", "--w-refresh-batch", "8",
+                     *extra])
+
+
+def test_refresh_swaps_the_evaluator_in_the_workers_and_is_deterministic(tmp_path, monkeypatch):
+    monkeypatch.setenv(search.TRAINING_ENV, "1")        # factory_sets opponents: training only
+    torch.set_num_threads(2)
+    te = _tiny_team_eval(tmp_path / "te.pt")
+    args = _refresh_args(te)
+    assert V2.refresh_enabled(args)
+    assert not V2.refresh_enabled(_refresh_args("stub", ["--team-eval-module", "rl.team_eval_stub"]))
+    probe = REF.probe_teams(8, seed=3)
+    pool = AZ.WorkerPool(2, V2.worker_cfg(args), None, seed=1, player=V2.SelfPlayerV2)
+    try:
+        assert pool.broadcast("call", ("team_eval_path", ())) == [te, te]
+        outs = []
+        for name in ("r1.pt", "r2.pt"):
+            path = str(tmp_path / name)
+            m = V2.run_refresh(pool, 2, te, path, [], args, 3, "cpu", probe)
+            assert pool.broadcast("call", ("team_eval_path", ())) == [path, path]
+            outs.append((path, m))
+        assert outs[0][1]["battles"] >= 48 and outs[0][1]["heldout_teams"] >= 1
+        for k in ("brier_before", "brier_after", "bce_before", "bce_after", "probe_abs_dw"):
+            assert np.isfinite(outs[0][1][k]), k
+            assert outs[0][1][k] == outs[1][1][k], k            # same seeds: the same refresh
+        from rl import team_eval as T
+        a, b, old = (T.TeamEvaluator.load(p) for p in (outs[0][0], outs[1][0], te))
+        sa, sb, so = a.net.state_dict(), b.net.state_dict(), old.net.state_dict()
+        assert all(torch.equal(sa[k], sb[k]) for k in sa)
+        assert any(not torch.equal(sa[k], so[k]) for k in sa)
+        assert a.meta["refreshed_from"] == te and a.meta["refresh_iteration"] == 3
+        # the new evaluator gives other tactician features
+        b0, obs = _tactician_obs("swap", 11)
+        f_new = V2.TeamFeatures(outs[0][0]).compute(b0, "swap", obs, search.run_ctx(b0))["opt_feat"]
+        f_old = V2.TeamFeatures(te).compute(b0, "swap", obs, search.run_ctx(b0))["opt_feat"]
+        assert not np.allclose(f_new, f_old)
+    finally:
+        pool.close()
+
+
+def test_real_battle_log(v2_selfplay):
+    sp, outs, runs, args = v2_selfplay
+    d = REF.merge_arrays([o.get("real") for o in outs])
+    assert d is not None and len(d["round"]) == len(d["b_team"]) >= 3
+    assert set(np.unique(d["btype"])) <= {0, 1, 2} and (d["battle"] >= 1).all() and (d["battle"] <= 7).all()
+    assert (d["species"] > 0).all() and d["stats"].shape == (len(d["round"]), 3, 6)
+    assert np.array_equal(d["b_team"], np.arange(len(d["round"])))
+
+
+def test_tiny_run_with_refresh_and_resume(tmp_path, monkeypatch):
+    monkeypatch.delenv(search.TRAINING_ENV, raising=False)
+    te = _tiny_team_eval(tmp_path / "te.pt")
+    run = str(tmp_path / "az2w")
+    common = ["--run-dir", run, "--decisions-per-iter", "60", "--workers", "2", "--inference", "cpu", "--device",
+              "cpu", "--eval-runs", "2", "--eval-rounds", "1", "--eval-workers", "1", "--eval-envs-per-worker", "2",
+              "--batch-b", "16", "--sims", "16", "--dets", "2", "--holdout", "0.3", "--team-eval", te,
+              "--t-minibatch", "8", "--eval-search-every", "0", "--w-refresh-after", "0", "--w-refresh-every", "2",
+              "--w-refresh-window", "1", "--w-refresh-battles", "48", "--w-refresh-battles-per-team", "4",
+              "--w-refresh-concurrency", "16", "--w-refresh-probe", "8"]
+    V2.main(common + ["--iterations", "3"])
+    files = os.listdir(run)
+    assert "team_eval_0000.pt" in files and "team_eval_0002.pt" in files
+    ck = torch.load(os.path.join(run, "latest.pt"), map_location="cpu", weights_only=False)
+    assert ck["team_eval"].endswith("team_eval_0002.pt")
+    assert ck["w_refresh"]["count"] == 2 and ck["w_refresh"]["last_it"] == 2 and ck["w_refresh"]["armed_it"] == 0
+    # ckpt_<steps> is written before the iteration's refresh (the W its self-play used), latest.pt after it
+    cks = [torch.load(os.path.join(run, f), map_location="cpu", weights_only=False)
+           for f in sorted(f for f in files if f.startswith("ckpt_"))]
+    assert cks[0]["team_eval"] == te and cks[0]["w_refresh"]["count"] == 0
+    assert cks[1]["team_eval"].endswith("team_eval_0000.pt") and cks[1]["w_refresh"]["count"] == 1
+    # resume: the refreshed W and the schedule come back (next refresh at iteration 4)
+    V2.main(common + ["--iterations", "5", "--init-from", os.path.join(run, "latest.pt")])
+    ck = torch.load(os.path.join(run, "latest.pt"), map_location="cpu", weights_only=False)
+    assert ck["iteration"] == 4 and ck["w_refresh"]["count"] == 3
+    assert ck["team_eval"].endswith("team_eval_0004.pt") and "team_eval_0003.pt" not in os.listdir(run)
+    from rl import team_eval as T
+    assert T.TeamEvaluator.load(ck["team_eval"]).meta["refreshed_from"].endswith("team_eval_0002.pt")

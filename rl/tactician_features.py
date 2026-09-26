@@ -22,6 +22,7 @@ is also the FactoryEnv obs_hook of the evaluation workers (__call__ adds "opt_fe
 """
 
 import importlib
+import os
 import inspect
 
 import numpy as np
@@ -92,6 +93,7 @@ class TeamFeatures:
         self.path, self.module, self.device, self.shaping = path, module, device, shaping
         self.v_next = None if v_next is None else list(map(float, v_next))
         self._ev = self._mod = None
+        self._pid = os.getpid()
 
     def __getstate__(self):
         d = dict(self.__dict__)
@@ -104,6 +106,11 @@ class TeamFeatures:
 
     def _load(self):
         if self._ev is None and self.enabled:
+            if os.getpid() != self._pid:
+                # a forked process (evaluation environments): the parent's OpenMP pool does not survive the fork,
+                # a multi-threaded forward would hang there
+                import torch
+                torch.set_num_threads(1)
             self._mod = team_eval_module(self.module)
             self._ev = load_evaluator(self._mod, self.path, self.device)
         return self._ev

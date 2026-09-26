@@ -32,6 +32,10 @@ Each iteration:
                    clipped ratio (--t-clip), GAE (lambda --t-gae-lambda, gamma 1) on the shaped rewards, value MSE on
                    ValueNorm-normalized returns, entropy bonus (--t-ent), and --t-imitation x CE(pi_eval, pi_net) with
                    pi_eval = softmax(Q_eval / --t-eval-temp), Q_eval(option) = Phi of the state the option leads to.
+  4. W refresh (rl/team_eval_refresh.py, docs §19.6): once the network-only evaluation reaches alphazero_v1's
+     (--w-refresh-after), every --w-refresh-every iterations the team evaluator is fine-tuned on fresh battles of the
+     current battler (+ recent real ones), blended with the old one (--w-refresh-alpha), saved as
+     team_eval_<iter>.pt and reloaded by the workers and the evaluation.
   3. Evaluation: per round, network only, every --eval-every iterations (eval_round_k/*); network + legal PUCT search
      of --eval-search-sims (strict sampler: inference never uses factory_sets) every --eval-search-every iterations
      (eval_search_round_k/*). Checkpoints as v1 (args["algo"] = "alphazero", args["version"] = 2, args["opt_feat"] = 4,
@@ -53,12 +57,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+from pybattle.backend import Phase
+
 from . import alphazero as AZ
 from . import encode
 from .envs import decode_action
 from .gumbel import GumbelBattler
 from .model import FactoryNet
 from .ppo import ValueNorm
+from . import team_eval_refresh as REF
 from .tactician_features import N_FEAT, V_NEXT_ROUNDS, TeamFeatures, softmax, to_action_space
 
 VERSION = 2
@@ -136,6 +143,27 @@ def parse(argv=None):
     p.add_argument("--eval-search-sims", type=int, default=512)
     p.add_argument("--eval-search-runs", type=int, default=64)
     p.add_argument("--eval-search-procs", type=int, default=12)
+    # periodic refresh of the team evaluator W (rl/team_eval_refresh.py, docs §19.6)
+    p.add_argument("--w-refresh-after", default=",".join(str(x) for x in REF.V1_REFERENCE),
+                   help="per-round P(complete) reference in %% (rounds 1..): refreshes start once the mean over the "
+                        "last --w-refresh-window network-only evaluations of the mean over rounds reaches the "
+                        "reference's mean (default: alphazero_v1's network only, §18b); 'none': never; '0': from "
+                        "the first evaluations")
+    p.add_argument("--w-refresh-every", type=int, default=20, help="iterations between refreshes (0: never)")
+    p.add_argument("--w-refresh-window", type=int, default=3, help="evaluations averaged by the trigger")
+    p.add_argument("--w-refresh-battles", type=int, default=4_000_000, help="fresh simulated battles per refresh")
+    p.add_argument("--w-refresh-battles-per-team", type=int, default=16)
+    p.add_argument("--w-refresh-concurrency", type=int, default=256, help="simulated battles alive per worker")
+    p.add_argument("--w-refresh-real-iters", type=int, default=5,
+                   help="also fine-tune on the real self-play battles of the last N iterations (0: no)")
+    p.add_argument("--w-refresh-epochs", type=int, default=2)
+    p.add_argument("--w-refresh-lr", type=float, default=2e-4)
+    p.add_argument("--w-refresh-batch", type=int, default=1024)
+    p.add_argument("--w-refresh-alpha", type=float, default=0.5,
+                   help="new parameters = alpha * fine-tuned + (1 - alpha) * old")
+    p.add_argument("--w-refresh-heldout", type=float, default=0.05,
+                   help="fresh teams kept out for the before / after metrics")
+    p.add_argument("--w-refresh-probe", type=int, default=1024, help="fixed probe teams for mean |dW|")
     p.add_argument("--init-from", default=None, help="checkpoint to resume from")
     a = p.parse_args(argv)
     # (rl.alphazero.train_iteration / heldout_stats read these; the tactician is not trained there in v2)
@@ -185,6 +213,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
                                      non_root=cfg["non_root"], c_puct=cfg["c_puct"],
                                      opponent_prior=cfg["opponent_prior"])
         self.features = TeamFeatures(cfg["team_eval"], cfg["team_eval_module"], shaping=bool(cfg["t_shaping"]))
+        self.real = REF.RealBattleLog()
         self.rng = random.Random(seed ^ 0xA2)
         self.np_rng = np.random.default_rng(seed + 2)
         self.env = AZ.CurriculumEnv(seed, max_decisions=cfg["max_decisions"])
@@ -195,6 +224,21 @@ class SelfPlayerV2(AZ.SelfPlayer):
 
     def set_v_next(self, table):
         self.features.set_v_next(table)
+
+    def set_team_eval(self, path):
+        """Use another team evaluator checkpoint from the next tactician decision on (a W refresh)."""
+        self.features = TeamFeatures(path, self.cfg["team_eval_module"], v_next=self.features.v_next,
+                                     shaping=bool(self.cfg["t_shaping"]))
+        return path
+
+    def team_eval_path(self):
+        return self.features.path
+
+    def gen_team_data(self, n_battles, seed):
+        """Simulated battles for a W refresh with this worker's battler evaluator (the current snapshot)."""
+        c = self.cfg
+        return REF.generate_battles(self.evaluator, n_battles, seed, c["w_refresh_battles_per_team"],
+                                    c["w_refresh_concurrency"], c["max_decisions"])
 
     @torch.no_grad()
     def t_act(self, kind, obs):
@@ -246,8 +290,11 @@ class SelfPlayerV2(AZ.SelfPlayer):
                 action = decode_action("battle", a)
                 made += 1
             else:
+                ctx = env._ctx()
                 action = self._tactician(kind, ev["obs"])
             self.ev = env.step(action)
+            if kind != "battle" and env.backend.phase in (Phase.BATTLE, Phase.FORCED_SWITCH):
+                self.real.start(env.backend, ctx)            # the team of the battle that starts now
             self._after(self.ev)
         # the run in progress: its closed decisions are trained now; the open one only bootstraps them and is
         # never trained (its log-prob belongs to this iteration's snapshot)
@@ -260,7 +307,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
         st["seconds"] = time.perf_counter() - t0
         st["battler_decisions"] = made
         out = {"battle": _stack_b(self.out_b), "rental": _stack_t(self.out_t, "rental"),
-               "swap": _stack_t(self.out_t, "swap"), "v_next": list(self.v_samples)}
+               "swap": _stack_t(self.out_t, "swap"), "v_next": list(self.v_samples), "real": self.real.take()}
         self.out_b, self.out_t, self.v_samples = [], [], []
         self.stats = self._new_stats()
         return out, dict(st)
@@ -272,6 +319,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
         fe = self.features.compute(env.backend, kind, obs, ctx)
         obs = dict(obs, opt_feat=fe["opt_feat"])
         a, logp, value = self.t_act(kind, obs)
+        self.real.on_tactician(kind, a if kind == "swap" else None)
         opts = fe["options"]
         if self.features.enabled and len(opts):
             pi_eval = to_action_space(kind, opts, softmax(fe["q_eval"], self.cfg["t_eval_temp"]))
@@ -324,6 +372,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
         st = ev["stats"]
         b = st.get("battle")
         if b is not None and b["won"] is not None:
+            self.real.end(b["won"], False, b.get("decisions", 0))
             self._finish_battle(float(b["won"]))
             self.run_wins += int(b["won"])
             self.stats["battles"] += 1
@@ -332,6 +381,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
             # the battle hit max_decisions (not a loss): the battler's z is its value at the cut; the run ends
             # here: the tactician's last decision bootstraps with its value (return units: shaped value + Phi)
             _, v = self.evaluator({k: np.stack([ev["obs"][k]]) for k in ev["obs"]})
+            self.real.end(False, True, self.cfg["max_decisions"])
             self._finish_battle(float(v[0]))
             if self.traj:
                 last = self.traj[-1]
@@ -541,13 +591,51 @@ def tactician_heldout(net, data, norm, device):
 def worker_cfg(args):
     keys = ("encode_version", "d_emb", "d", "layers", "heads", "sims", "dets", "c_puct", "search_batch",
             "max_considered", "c_visit", "c_scale", "gumbel_rescale", "non_root", "max_decisions", "holdout",
-            "opponent_prior", "team_eval", "team_eval_module", "t_shaping", "t_eval_temp", "t_gae_lambda")
+            "opponent_prior", "team_eval", "team_eval_module", "t_shaping", "t_eval_temp", "t_gae_lambda",
+            "w_refresh_battles_per_team", "w_refresh_concurrency")
     return {k: getattr(args, k) for k in keys}
 
 
-def eval_hook(args, v_next):
-    """The evaluation environments' obs_hook: the same per-option features as in self-play (no shaping)."""
-    return TeamFeatures(args.team_eval, args.team_eval_module, v_next=v_next, shaping=False)
+def eval_hook(args, v_next, team_eval=None):
+    """The evaluation environments' obs_hook: the same per-option features as in self-play (no shaping), with the
+    team evaluator in use (team_eval: the refreshed one; default --team-eval)."""
+    return TeamFeatures(team_eval or args.team_eval, args.team_eval_module, v_next=v_next, shaping=False)
+
+
+def refresh_enabled(args):
+    """A W refresh needs a trainable evaluator (rl.team_eval), not the stub."""
+    if args.team_eval is None:
+        return False
+    from .tactician_features import team_eval_module
+    return hasattr(team_eval_module(args.team_eval_module), "TeamNet")
+
+
+def run_refresh(pool, n_workers, cur_path, out_path, real_parts, args, it, device, probe, tb=None, step=0):
+    """One W refresh (docs §19.6): fresh battles from the workers + recent real battles, fine-tune, blend, save
+    out_path atomically, reload in the workers. -> metrics."""
+    from .tactician_features import load_evaluator, team_eval_module
+    t0 = time.time()
+    per = math.ceil(args.w_refresh_battles / n_workers)
+    seeds = [(args.seed * 1_000_003 + 7919 * it + 104729 * w) & 0x7FFFFFFF for w in range(n_workers)]
+    gen = pool.call("call", [("gen_team_data", (per, s)) for s in seeds])
+    t_gen = time.time() - t0
+    fresh = REF.merge_arrays(gen)
+    real = REF.merge_arrays(list(real_parts)) if args.w_refresh_real_iters > 0 else None
+    data = REF.merge_arrays([fresh, real])
+    ev = load_evaluator(team_eval_module(args.team_eval_module), cur_path, "cpu")
+    new, m = REF.refresh(ev, data, epochs=args.w_refresh_epochs, lr=args.w_refresh_lr, alpha=args.w_refresh_alpha,
+                         heldout=args.w_refresh_heldout, batch=args.w_refresh_batch, device=device,
+                         seed=args.seed + 7 * it, probe=probe)
+    new.save(out_path, {"refresh_iteration": int(it), "refreshed_from": cur_path,
+                        "refresh_battles": m["battles"], "refresh_alpha": args.w_refresh_alpha})
+    pool.broadcast("call", ("set_team_eval", (out_path,)))
+    m.update(fresh_battles=int((~fresh["b_trunc"]).sum()) if fresh is not None else 0,
+             real_battles=int((~real["b_trunc"]).sum()) if real is not None else 0,
+             generate_seconds=t_gen, seconds=time.time() - t0)
+    if tb is not None:
+        for k, v in m.items():
+            tb.add_scalar(f"w_refresh/{k}", v, step)
+    return m
 
 
 def main(argv=None):
@@ -571,6 +659,14 @@ def main(argv=None):
     opt = torch.optim.AdamW(net.parameters(), lr=args.lr, weight_decay=args.weight_decay, eps=1e-5)
     norms = {a: ValueNorm(args.value_norm_rate) for a in ("battler", "tactician")}
     vnext = VNext(args.v_next_rate)
+    schedule = REF.RefreshSchedule(REF.parse_reference(args.w_refresh_after), args.w_refresh_every,
+                                   args.w_refresh_window)
+    if schedule.enabled and not refresh_enabled(args):
+        print("W refresh disabled: it needs --team-eval with the trainable evaluator (rl.team_eval)", flush=True)
+        schedule.every = 0
+    w_path = args.team_eval                           # the team evaluator in use
+    real_parts = collections.deque(maxlen=max(args.w_refresh_real_iters, 1))
+    probe = None
     it0, b_steps, t_steps = 0, 0, 0
     round_eval = {}
     if args.init_from:
@@ -583,6 +679,10 @@ def main(argv=None):
                 norms[a].load(st)
         if ck.get("v_next"):
             vnext.load(ck["v_next"])
+        if ck.get("team_eval"):
+            w_path = ck["team_eval"]
+        if ck.get("w_refresh"):
+            schedule.load(ck["w_refresh"])
         it0 = ck.get("iteration", -1) + 1
         b_steps, t_steps = ck.get("battler_steps", 0), ck.get("tactician_steps", 0)
         round_eval = {int(k): v for k, v in (ck.get("round_eval") or {}).items()}
@@ -594,6 +694,7 @@ def main(argv=None):
     def ckpt_dict(it):
         return {"net": net.state_dict(), "opt": opt.state_dict(), "args": config, "battler_steps": b_steps,
                 "tactician_steps": t_steps, "iteration": it, "round_eval": round_eval, "v_next": vnext.state(),
+                "team_eval": w_path, "w_refresh": schedule.state(),
                 "value_norm": {k: (v.state() if v.seen else None) for k, v in norms.items()}}
 
     def write_snapshot():
@@ -608,6 +709,8 @@ def main(argv=None):
         from .inference import InferenceServer
         server = InferenceServer(snap_path, n_clients=args.workers + eval_slots)
     pool = AZ.WorkerPool(args.workers, worker_cfg(args), server, args.seed, player=SelfPlayerV2)
+    if w_path != args.team_eval:                      # resumed after a refresh
+        pool.broadcast("call", ("set_team_eval", (w_path,)))
     replay = AZ.Replay(args.window)
     rng = np.random.default_rng(args.seed + 17)
     t_start = time.time()
@@ -639,6 +742,7 @@ def main(argv=None):
             bdata = AZ.merge([{"battle": r["battle"]} for r, _ in results])
             tdata = merge_t([r for r, _ in results])
             v_samples = [x for r, _ in results for x in r["v_next"]]
+            real_parts.append(REF.merge_arrays([r.get("real") for r, _ in results]))
             new_counts = {"battle": int((~bdata["battle"]["held"]).sum()) if bdata["battle"] is not None else 0}
             b_steps += made
             t_steps += int(sum(s.get("t_decisions", 0) for s in stats))
@@ -671,8 +775,25 @@ def main(argv=None):
                 with_search = bool(args.eval_search_every and (it + 1) % args.eval_search_every == 0
                                    and args.eval_search_sims > 0 and server is not None)
                 round_eval = evaluate_rounds_v2(net, device, args, tb, b_steps, server, snap_path,
-                                                vnext.table.tolist(), with_search)
+                                                vnext.table.tolist(), with_search, w_path)
+                schedule.observe(it, round_eval)
             t_eval = time.time() - t0
+            # ---- 4. W refresh (self-play is paused between iterations) -----------------------------------------
+            if schedule.enabled:
+                tb.add_scalar("w_refresh/trigger_mean_complete", schedule.running_mean(), b_steps)
+                tb.add_scalar("w_refresh/armed", float(schedule.armed_it is not None), b_steps)
+            if schedule.due(it):
+                if probe is None:
+                    probe = REF.probe_teams(args.w_refresh_probe, seed=12345)
+                new_path = os.path.join(run_dir, f"team_eval_{it:04d}.pt")
+                m = run_refresh(pool, args.workers, w_path, new_path, real_parts, args, it, device, probe, tb,
+                                b_steps)
+                w_path = new_path
+                schedule.done(it)
+                tb.add_scalar("w_refresh/count", schedule.count, b_steps)
+                print(f"[it {it:4d}] W refreshed -> {new_path}: {m['battles']:,} battles, brier "
+                      f"{m['brier_before']:.4f} -> {m['brier_after']:.4f}, probe |dW| "
+                      f"{m.get('probe_abs_dw', float('nan')):.4f} ({m['seconds']:.0f} s)", flush=True)
             AZ.save_atomic(ckpt_dict(it), os.path.join(run_dir, "latest.pt"))
             tb.add_scalar("perf/selfplay_seconds", t_play, b_steps)
             tb.add_scalar("perf/train_seconds", t_train, b_steps)
@@ -731,11 +852,11 @@ def log_selfplay_v2(tb, stats, bdata, tdata, made, t_play, weights, step, vnext,
             tb.add_scalar(f"v_next/samples_round_{r}", vcount.get(r, 0), step)
 
 
-def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, with_search):
+def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, with_search, team_eval=None):
     """Per-round evaluation, network only (greedy), with the tactician's features; optionally network + legal PUCT
     search (--eval-search-sims, the strict sampler: never factory_sets outside training's self-play)."""
     from .eval_rounds import eval_round, eval_round_inprocess
-    hook = eval_hook(args, v_next)
+    hook = eval_hook(args, v_next, team_eval)
     res = {}
     policy = AZ.NetPolicy(net)
     for k in AZ._rounds(args.eval_rounds):
