@@ -829,6 +829,151 @@ Usos:
 Información: entrenar W con los sets reales es conocimiento que un jugador adquiere jugando ("este equipo suele ganar en
 la ronda 5"), aceptado por el usuario; nunca información oculta de un rival concreto.
 
+#### 19.2.1 Implementación: `rl/team_eval.py`, `rl/team_eval_data.py` (2026-09-26, `runs/team_eval_v1/`)
+
+**Lo que la red ve de un equipo** (`TeamMon`, construido solo desde la vista del táctico):
+- nuestros Pokémon (alquileres y nuestro equipo en la pantalla de intercambio): el jugador los ve enteros en la
+  pantalla de resumen: especie, 4 movimientos, objeto, habilidad y estadísticas (PS máximos y las otras 5). Los IVs,
+  EVs y la naturaleza no se usan: ya están dentro de las estadísticas;
+- el Pokémon que entraría con un intercambio: solo lo que se vio de él en el combate (`SeenMon`): especie, los
+  movimientos que usó, el objeto y la habilidad si el juego los nombró; lo demás es DESCONOCIDO (su propio token) y
+  sus estadísticas, desconocidas;
+- el orden: el primero es el líder (una marca en su token). Nunca se lee nada del rival (hay un test que cambia en la
+  RAM los movimientos, objetos, IVs y naturalezas del equipo derrotado y el siguiente rival real, y comprueba que las
+  características salen idénticas).
+
+**Rondas a partir de la 7**: W(equipo, r) = W(equipo, 6) exactamente, como hace el juego (nivel abierto, el único que
+entrenamos): la fila del pool de rivales es min(desafío, 7) y las filas 4–7 son el mismo rango; los rivales normales y
+del último combate tienen siempre IV 3 / 6 (el fallo de la Battle Tower: `GetFactoryMonFixedIV` recibe la racha de la
+Tower), y el IV de Noland es 31 desde la ronda 6. Por eso la ronda se recorta a 1..6 (la 5 y la 6 comparten incluso
+los rivales normales; solo cambian los alquileres que se ofrecen). Noland vuelve en las rondas 9, 12, …
+(`battle_types`, con `factory_brain_status`).
+
+**Datos** (`python -m rl.team_eval_data`). Un *caso* es un equipo en una ronda y un tipo de combate, jugado en 12
+combates simulados independientes (rival nuevo cada vez):
+1. ronda r uniforme en 1..6; tipo normal (combate b uniforme en 1..6) o último (70 % / 30 %); en las rondas 3 y 6 el
+   séptimo combate es de Noland, así que allí los tipos son normal / Noland (60 % / 40 %);
+2. `SimBackend.reset` en la racha 7(r − 1) + b − 1 con un contador de alquileres al azar dentro de lo posible
+   [r − 1, 7(r − 1)] (como `FactoryEnv`): el juego genera los 6 alquileres de la ronda; se alquila un trío legal y un
+   líder al azar; se escribe el número de combate en la partida guardada para que el contexto que ve el combatiente
+   sea el de ese combate;
+3. equipos tras intercambios: con probabilidad 0,5 uno de nuestros Pokémon (dos, en el 30 % de esos casos) se cambia
+   por un set del pool de rivales de la ronda, construido como el juego construyó al rival (EVs y naturaleza del set,
+   IV 3), de especie distinta a las del equipo; se marca como "intercambiado";
+4. cada combate: una copia del juego, el equipo rival sustituido por uno de `sample_factory_sets` (el pool de la
+   ronda, las exclusiones de su generación, EVs / naturaleza del set, el IV del juego para ese combate) y el RNG
+   resembrado; lo juega la red de alphazero_v1 (`--battler-ckpt`), voraz y sin búsqueda, en el servidor de inferencia
+   de la GPU; todos los combates de un proceso avanzan a la vez; corte a las 300 decisiones (marcado como truncado y
+   excluido del entrenamiento: 0,12 %).
+
+**Tamaño y velocidad**: 45 minutos con 18 procesos: **1.992.338 equipos, 23,9 millones de combates** (≈ 8.850
+combates/s, 126.000 decisiones del combatiente/s).
+
+**Cómo se ve un Pokémon intercambiado en la pantalla de intercambio** (medido en 1.500 Pokémon derrotados con
+alphazero_v1 voraz): movimientos revelados 0/1/2/3/4 en el 18 / 44 / 24 / 10 / 4 %, objeto nombrado 19 %, habilidad
+anunciada 4 % (especies con dos habilidades). En el entrenamiento, cada Pokémon intercambiado se muestra así (lo no
+revelado, DESCONOCIDO; estadísticas desconocidas) con probabilidad 0,5, y entero con probabilidad 0,5 (en la pantalla
+de intercambio siguiente ya es nuestro y se ve entero).
+
+**Red** (`TeamNet`, 429.000 parámetros): cada Pokémon es un token (embeddings de especie, tipos, objeto, habilidad y
+habilidades posibles; la suma de sus 4 movimientos codificados con embeddings de movimiento, efecto y tipo más
+potencia / precisión / prioridad / PP; estadísticas base; estadísticas propias si se conocen; marca de líder); se suma
+un embedding de la ronda a cada token; un transformer de 2 capas sin posiciones los mezcla (invariante al orden salvo
+por la marca de líder); media + token del líder + ronda → MLP → 3 logits (normal, último, Noland), sigmoide.
+Pérdida: la log-verosimilitud binomial de (ganados de jugados) de cada equipo en su cabeza, que es la suma de las BCE
+por combate. AdamW, lr 2·10⁻³ con *one-cycle*, lotes de 2.048 equipos, 8 épocas (97 s en la GPU). Validación: el 5 %
+de los equipos (99.617, 1,19 M combates), separados por equipo.
+
+Medidas, definidas antes de usarlas:
+- **Calibración**: si la red dice 0,8, ¿se gana el 80 %? Se ordenan los combates por la W predicha, se parten en 10
+  grupos iguales (deciles) y se compara la media predicha con la proporción ganada de cada grupo.
+- **Brier**: media de (W predicha − resultado)², con resultado 1 / 0; más bajo es mejor. Se compara con el de
+  predecir siempre la misma media ("constante").
+- **AUC**: probabilidad de que un combate ganado tenga una W predicha mayor que uno perdido (0,5 = azar, 1 = perfecto).
+
+**Calibración** (validación, por combate; cada columna es un decil de la probabilidad predicha):
+
+| Decil | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Predicho | 0,295 | 0,455 | 0,561 | 0,649 | 0,721 | 0,777 | 0,821 | 0,857 | 0,890 | 0,931 |
+| Observado | 0,294 | 0,456 | 0,559 | 0,649 | 0,720 | 0,774 | 0,820 | 0,857 | 0,890 | 0,929 |
+
+Brier 0,1732 (0,2121 con la media global); AUC 0,758. Por ronda y tipo (AUC por combate; Brier frente al de predecir
+la media de esa casilla; "explicada" = fracción de la varianza real entre equipos de esa casilla que explica la red,
+quitando el ruido binomial de 12 combates):
+
+| Ronda | Tipo | Victorias | Predicho | AUC | Brier (constante) | Varianza explicada |
+|---|---|---|---|---|---|---|
+| 1 | normal | 0,835 | 0,836 | 0,684 | 0,128 (0,138) | 0,97 |
+| 1 | último | 0,820 | 0,819 | 0,685 | 0,137 (0,148) | 0,97 |
+| 2 | normal | 0,810 | 0,812 | 0,708 | 0,139 (0,154) | 0,99 |
+| 2 | último | 0,795 | 0,794 | 0,700 | 0,148 (0,163) | 0,99 |
+| 3 | normal | 0,783 | 0,785 | 0,672 | 0,158 (0,170) | 0,96 |
+| 3 | Noland | 0,419 | 0,419 | 0,653 | 0,226 (0,244) | 0,93 |
+| 4 | normal | 0,822 | 0,824 | 0,671 | 0,138 (0,147) | 0,98 |
+| 4 | último | 0,801 | 0,802 | 0,671 | 0,149 (0,160) | 0,98 |
+| 5 | normal | 0,572 | 0,572 | 0,669 | 0,223 (0,245) | 0,94 |
+| 5 | último | 0,539 | 0,539 | 0,668 | 0,227 (0,248) | 0,98 |
+| 6 | normal | 0,617 | 0,619 | 0,674 | 0,215 (0,236) | 0,90 |
+| 6 | Noland | 0,373 | 0,372 | 0,662 | 0,216 (0,234) | 0,91 |
+
+Lectura: el AUC por combate es moderado (0,65–0,71) porque un combate suelto depende mucho del rival y del azar, pero
+casi toda la diferencia *entre equipos* que existe en estos datos la recoge la red (90–99 %; la desviación típica real
+del porcentaje de victorias entre equipos es 0,10–0,16 dentro de cada casilla). Los equipos con intercambios se
+explican casi igual que los de alquiler (0,88–1,00 frente a 0,93–1,02; `runs/team_eval_v1/within_round.json`).
+
+**Validación del experto en el juego real** (la condición de 19.3; `python -m rl.team_eval_validate`, misma prueba
+que 18b.3). Definiciones:
+- **π_eval**: la opción de mayor Q_eval = Φ del estado tras la opción (E_ronda + P(completar) × V_siguiente).
+  **π_red**: la de mayor probabilidad según la red del táctico de alphazero_v1.
+- **V_siguiente** para esta prueba: victorias medias desde el inicio de la ronda r + 1 con alphazero_v1 voraz (los dos
+  agentes), de `runs/diag_az1/q1_az_allgreedy.npz`: 11,02 / 7,97 / 7,45 / 3,79 / 4,19 / 5,67 para r = 1..6.
+- **Estados**: los que alcanza alphazero_v1 jugando (combatiente voraz, táctico muestreado): 126 alquileres (primera
+  decisión de rachas desde la ronda 1) y 126 cambios de las rondas 3–5 (sin las pantallas antes de Noland).
+- **Resultado real de una opción**: se juega en el juego real con 64 semillas emparejadas (las mismas para todas las
+  opciones) hasta que acaba la ronda, con el combatiente y el táctico de alphazero_v1 voraces. Aquí se jugaron
+  **todas** las opciones (60 alquileres, 10 cambios) de cada estado. "Victorias" = combates ganados hasta el final de
+  la ronda; "Φ real" = victorias + V_siguiente si se completó la ronda (las unidades de Q_eval).
+- **Ganancia**: resultado real de π_eval menos el de π_red, media sobre estados (± error típico); "donde difieren" solo
+  cuenta los estados en que eligen distinto. **P(mejor)**: fracción de esos estados en que π_eval sale mejor.
+  **Correlación**: entre la ganancia que el evaluador promete (diferencia de Q_eval) y la real.
+- **Mejor opción en el top-3**: la opción con más victorias reales medias está entre las 3 primeras del criterio
+  (con 64 semillas la "mejor" es ruidosa: su error típico es ≈ 0,25 victorias). **Spearman**: correlación de rangos,
+  en cada estado, entre la puntuación del criterio y el resultado real de todas las opciones.
+
+| | Difieren | Ganancia donde difieren | Ganancia en todos | P(mejor) | Corr. prometida/real | Mejor en top-3: eval / red | Spearman: eval / red |
+|---|---|---|---|---|---|---|---|
+| Alquiler, victorias | 105/126 | +0,085 ± 0,072 | +0,071 ± 0,060 | 0,51 | +0,15 | 0,17 / 0,21 | 0,57 / 0,53 |
+| Alquiler, Φ real | 105/126 | +0,16 ± 0,18 | +0,13 ± 0,15 | 0,50 | +0,19 | 0,18 / 0,23 | 0,57 / 0,53 |
+| Cambio, victorias | 58/126 | −0,030 ± 0,076 | −0,014 ± 0,035 | 0,48 | +0,36 | 0,68 / 0,66 | 0,52 / 0,49 |
+| Cambio, Φ real | 58/126 | −0,04 ± 0,14 | −0,02 ± 0,07 | 0,52 | +0,34 | 0,68 / 0,62 | 0,54 / 0,50 |
+
+(Con solo E_ronda como criterio, sin V_siguiente, sale lo mismo: +0,088 ± 0,073 y −0,037 ± 0,078.) Referencia: la
+búsqueda por simulación de alphazero_v1 daba −0,06 (alquiler) y −0,24 ± 0,09 (cambio) en la misma prueba (18b.3).
+
+**Veredicto**: el evaluador **no elige mejor que la red** por más de 2 errores típicos (alquiler +1,2 SE, cambio
+−0,4 SE). Ordena todas las opciones algo mejor que la red (Spearman 0,57 frente a 0,53 y 0,52 frente a 0,49) y, a
+diferencia de la búsqueda de §18, no elige peor, pero su argmax no gana más. Según la condición de 19.3, el
+coeficiente de imitación debe quedar en 0 con este evaluador (sí pueden usarse sus características como entrada y el
+shaping, que no cambia la política óptima). Nota: las primeras 54 rachas de alquiler daban +0,37 ± 0,12; con las 126
+bajó a +0,09 ± 0,07: con esta prueba hacen falta todos los estados para no sacar conclusiones de la varianza.
+
+**Interfaz** (la que usa `rl/alphazero_v2.py` vía `rl/tactician_features.py`):
+- `TeamEvaluator.load(path, device="cpu")` (método de clase); `ev.w(equipos, ronda)` → [n, 3].
+- `team_of_option(view, kind, opción)`: opciones como las da `options_of` (alquiler (líder, índice de pareja); cambio
+  0..9, también `None` / `NO_ACTION` / (hueco propio, hueco rival)).
+- `option_features(ev, view, kind, ctx, opciones, v_next)` → [n, 4] = [E_ronda, W(normal), W(último o Noland, el que
+  sea el combate 7 de esta ronda), Δ].
+- `phi(ev, view, kind, ctx, v_next)`: Φ del estado actual. En un cambio, el equipo actual. En un alquiler todavía no
+  hay equipo: se define como **la media de Φ sobre los alquileres legales** (la misma referencia que Δ). También
+  acepta un `Team` o (kind, opción): el estado tras la elección (`phi_options` da todas).
+- `ctx` es `run_ctx`: ronda = `challenge` + 1, k = `battle` + 1. La Q_eval que calcula el entrenador,
+  E_ronda + W_n^(7−k)·W_l·v_next, es exactamente Φ del estado tras la opción, también con Noland (W_l es la
+  columna del combate 7 que corresponda); hay un test que lo comprueba.
+- Coste: ≈ 3 ms en CPU por decisión de alquiler (60 opciones). En procesos hijos (los de `FactoryEnv` de
+  `eval_rounds`), torch se pone a 1 hilo: construir la red en un hijo `fork` de un padre que ya usó varios hilos se
+  quedaba colgado.
+
 ### 19.3 Táctico híbrido
 - **π_red**: política del táctico. **Q_eval(opción)**: Φ del estado resultante según el evaluador.
   **π_eval** = softmax(Q_eval / T), el "experto".
