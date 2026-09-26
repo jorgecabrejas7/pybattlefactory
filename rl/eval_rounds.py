@@ -37,8 +37,10 @@ from .envs import VecEnv, decode_action
 from .policy import Policy
 
 
-def eval_round(policy, device, k, n_runs, workers=4, envs_per_worker=8, seed=777):
-    env = VecEnv(workers, envs_per_worker, seed=seed + 1000 * k, win_streak=7 * (k - 1))
+def eval_round(policy, device, k, n_runs, workers=4, envs_per_worker=8, seed=777, obs_hook=None):
+    """obs_hook: FactoryEnv's (alphazero_v2: the tactician's per-option features)."""
+    extra = {"obs_hook": obs_hook} if obs_hook is not None else {}
+    env = VecEnv(workers, envs_per_worker, seed=seed + 1000 * k, win_streak=7 * (k - 1), **extra)
     events = env.start()
     wins = np.zeros(env.n, int)
     done = []                                   # (wins in the round, completed)
@@ -113,12 +115,12 @@ def search_battler(policy, evaluator=None, **kw):
     return act
 
 
-def play_env(env_seed, k, n_runs, policy, battler, stats):
+def play_env(env_seed, k, n_runs, policy, battler, stats, obs_hook=None):
     """The first n_runs runs of one environment (eval_round's per-environment protocol) -> [(wins, completed)]."""
     from pybattle.emu.decode import SB2_RENTAL_MONS, decode_rental_mons
     from .determinize import ExclusionTracker
     from .envs import NO_ACTION, FactoryEnv
-    env = FactoryEnv(env_seed, win_streak=7 * (k - 1))
+    env = FactoryEnv(env_seed, win_streak=7 * (k - 1), obs_hook=obs_hook)
     known = ExclusionTracker()
     ev = env._advance(NO_ACTION)
     out, wins = [], 0
@@ -138,7 +140,7 @@ def play_env(env_seed, k, n_runs, policy, battler, stats):
             wins = 0
             # a fresh environment per run: every run (env, j) gets its own seed and starts identically whatever
             # battler is evaluated (with one environment, a run's seed would depend on how the earlier ones ended)
-            env = FactoryEnv(env_seed + 7919 * len(out), win_streak=7 * (k - 1))
+            env = FactoryEnv(env_seed + 7919 * len(out), win_streak=7 * (k - 1), obs_hook=obs_hook)
             known = ExclusionTracker()
             ev = env._advance(NO_ACTION)
             continue
@@ -169,7 +171,8 @@ _SERVER = None                                  # the GPU inference server, set 
 
 
 def _worker(args):
-    (ckpt, device, battler_kind, kw, k, env_seeds, n_runs, threads, slot) = args
+    (ckpt, device, battler_kind, kw, k, env_seeds, n_runs, threads, slot) = args[:9]
+    obs_hook = args[9] if len(args) > 9 else None
     torch.set_num_threads(threads)
     policy = Policy(ckpt, torch.device(device))
     ev = _SERVER.client(slot).evaluate if _SERVER is not None else None
@@ -177,14 +180,14 @@ def _worker(args):
     stats = {"ms": 0.0, "decisions": 0}
     runs = []
     for s in env_seeds:
-        runs += play_env(s, k, n_runs, policy, battler, stats)
+        runs += play_env(s, k, n_runs, policy, battler, stats, obs_hook)
     sb = getattr(battler, "search", None)
     stats["search_errors"] = sb.errors if sb is not None else 0
     return runs, stats
 
 
 def eval_round_inprocess(ckpt, k, n_runs, battler="net", search_kw=None, workers=4, envs_per_worker=8, seed=777,
-                         procs=1, device="cpu", threads=1, server=None, slot0=0):
+                         procs=1, device="cpu", threads=1, server=None, slot0=0, obs_hook=None):
     """eval_round with a battler that sees the backend. Returns complete / battle / n / ms_per_decision.
     server: an rl.inference.InferenceServer with >= slot0 + procs client slots (the battler's network on the GPU;
     worker p uses slot slot0 + p)."""
@@ -196,7 +199,7 @@ def eval_round_inprocess(ckpt, k, n_runs, battler="net", search_kw=None, workers
     target = int(np.ceil(n_runs / n_env))
     kw = dict(search_kw or {})
     jobs = [(ckpt, device, battler, dict(kw, seed=kw.get("seed", 0) + 7919 * p + 104729 * k), k, seeds[p::procs],
-             target, threads, slot0 + p) for p in range(procs)]
+             target, threads, slot0 + p, obs_hook) for p in range(procs)]
     if server is not None and server.n_clients < slot0 + procs:
         raise ValueError(f"the inference server has {server.n_clients} client slots, {slot0 + procs} needed")
     _SERVER = server

@@ -447,11 +447,11 @@ def _stack(samples, kind):
 
 # ---- worker processes -------------------------------------------------------------------------------------------------
 
-def _worker_proc(conn, wid, cfg, server, seed):
+def _worker_proc(conn, wid, cfg, server, seed, player=None):
     try:
         torch.set_num_threads(1)
         ev = server.client(wid).evaluate if server is not None else None
-        sp = SelfPlayer(cfg, seed, ev)
+        sp = (player or SelfPlayer)(cfg, seed, ev)
         while True:
             cmd, arg = conn.recv()
             try:
@@ -461,6 +461,8 @@ def _worker_proc(conn, wid, cfg, server, seed):
                 elif cmd == "weights":
                     sp.set_weights(arg)
                     conn.send(("ok", None))
+                elif cmd == "call":                   # (name, args): another method of the self-player
+                    conn.send(("ok", getattr(sp, arg[0])(*arg[1])))
                 elif cmd == "play":
                     conn.send(("ok", sp.play(arg)))
                 elif cmd == "close":
@@ -476,12 +478,14 @@ def _worker_proc(conn, wid, cfg, server, seed):
 class WorkerPool:
     """n forked SelfPlayer processes (fork after the inference server is created: they inherit its client slots)."""
 
-    def __init__(self, n, cfg, server=None, seed=0):
+    def __init__(self, n, cfg, server=None, seed=0, player=None):
+        """player: the self-play class (SelfPlayer; alphazero_v2 passes its own)."""
         ctx = mp.get_context("fork")
         self.conns, self.procs = [], []
         for w in range(n):
             a, b = ctx.Pipe()
-            p = ctx.Process(target=_worker_proc, args=(b, w, cfg, server, seed * 1_000_003 + 7919 * w), daemon=True)
+            p = ctx.Process(target=_worker_proc, args=(b, w, cfg, server, seed * 1_000_003 + 7919 * w, player),
+                            daemon=True)
             p.start()
             self.conns.append(a)
             self.procs.append(p)
@@ -866,7 +870,8 @@ def main(argv=None):
     return run_dir
 
 
-def log_selfplay(tb, stats, data, made, t_play, weights, step):
+def log_selfplay(tb, stats, data, made, t_play, weights, step, tsearch=True):
+    """tsearch: the tactician-search scalars (alphazero_v2 has no tactician search)."""
     tot = collections.defaultdict(float)
     runs, starts = [], []
     for s in stats:
@@ -893,6 +898,13 @@ def log_selfplay(tb, stats, data, made, t_play, weights, step):
     tb.add_scalar("search/argmax_changed_frac", tot["b_changed"] / ns, step)
     tb.add_scalar("actions/battler_switch_frac", tot["b_switch"] / n, step)
     nt = max(tot["t_decisions"], 1)
+    if tsearch:
+        _log_tsearch(tb, tot, nt, step)
+    tb.add_scalar("actions/tactician_swap_frac", tot["t_swaps"] / max(tot["t_swap_decisions"], 1), step)
+    _log_runs(tb, tot, runs, starts, weights, data, step)
+
+
+def _log_tsearch(tb, tot, nt, step):
     tb.add_scalar("tsearch/ms_per_decision", tot["t_ms"] / nt, step)
     tb.add_scalar("tsearch/sims_per_decision", tot["t_sims"] / nt, step)
     tb.add_scalar("tsearch/sim_steps_per_decision", tot["t_sim_steps"] / nt, step)
@@ -901,7 +913,9 @@ def log_selfplay(tb, stats, data, made, t_play, weights, step):
     tb.add_scalar("tsearch/chosen_is_prior_argmax", tot["t_chosen_is_prior_argmax"] / nt, step)
     tb.add_scalar("tsearch/value", tot["t_value_sum"] / max(tot["t_value_n"], 1), step)
     tb.add_scalar("tsearch/value_net", tot["t_value_net_sum"] / nt, step)
-    tb.add_scalar("actions/tactician_swap_frac", tot["t_swaps"] / max(tot["t_swap_decisions"], 1), step)
+
+
+def _log_runs(tb, tot, runs, starts, weights, data, step):
     if tot["battles"]:
         tb.add_scalar("train/battle_win_rate", tot["battles_won"] / tot["battles"], step)
     tb.add_scalar("train/truncated_battles", tot["truncated"], step)
@@ -922,7 +936,7 @@ def log_selfplay(tb, stats, data, made, t_play, weights, step):
             tb.add_scalar(f"curriculum/started_round_{k}", c[k] / len(starts), step)
     for kind in KINDS:
         d = data.get(kind)
-        tb.add_scalar(f"selfplay/new_samples_{kind}", 0 if d is None else len(d["z"]), step)
+        tb.add_scalar(f"selfplay/new_samples_{kind}", 0 if d is None else len(next(iter(d["obs"].values()))), step)
 
 
 def evaluate_rounds(net, device, args, tb, step, server, snap_path):

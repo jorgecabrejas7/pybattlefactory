@@ -45,11 +45,14 @@ def potential(game, view, w_hp=0.4, w_alive=0.4, w_stages=0.2):
 
 class FactoryEnv:
     def __init__(self, seed, gamma=0.99, beta=0.5, max_decisions=300, win_streak=0, start_p0=1.0,
-                 start_max_round=5):
+                 start_max_round=5, obs_hook=None):
         """start_p0: probability that a run starts at round 1 (streak 0); otherwise it starts at the beginning of
         a round drawn uniformly from 2..start_max_round+1 (streak 7k), with a random rental counter in the range a
         player could have there: [k, 7k] (each completed round adds 1 for the rental plus up to 6 swaps; the
-        counter only moves on wins). Defaults: always from streak `win_streak`."""
+        counter only moves on wins). Defaults: always from streak `win_streak`.
+        obs_hook: optional f(backend, kind, obs, ctx) -> obs applied to every rental / swap observation (alphazero_v2:
+        rl.tactician_features.TeamFeatures adds the per-option features "opt_feat")."""
+        self.obs_hook = obs_hook
         self.rng = random.Random(seed)
         self.gamma, self.beta, self.max_decisions, self.win_streak = gamma, beta, max_decisions, win_streak
         self.start_p0, self.start_max_round = start_p0, start_max_round
@@ -135,7 +138,10 @@ class FactoryEnv:
             view = be.view()
             kind = "rental" if be.phase == Phase.RENTAL else "swap"
             # the swap mask mirrors Swap_AlreadyHasSameSpecies (host_factory_screen.c)
-            obs = encode.rental(view, self._ctx()) if kind == "rental" else encode.swap(view, self._ctx())
+            ctx = self._ctx()
+            obs = encode.rental(view, ctx) if kind == "rental" else encode.swap(view, ctx)
+            if self.obs_hook is not None:
+                obs = self.obs_hook(be, kind, obs, ctx)
             return {"kind": kind, "obs": obs, "close_b": close_b, "close_t": close_t, "truncate": False,
                     "stats": stats}
         view = be.view()
