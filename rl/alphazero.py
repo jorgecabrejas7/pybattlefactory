@@ -147,7 +147,7 @@ class AZBattler(SearchBattler):
 
     def __init__(self, evaluator, n_sims=128, n_determinizations=8, c_puct=1.5, batch=32, seed=0,
                  dirichlet_alpha=0.3, dirichlet_frac=0.25, observer="auto", opponent_prior="strict"):
-        if observer == "auto" and encode.VERSION not in (3, 4):
+        if observer == "auto" and encode.VERSION not in encode.CPP_VERSIONS:
             observer = "python"                       # the C++ observer encodes versions 3 and 4
         super().__init__(None, n_sims=n_sims, n_determinizations=n_determinizations, c_puct=c_puct, batch=batch,
                          mode="legal", seed=seed, impl="cpp", observer=observer, evaluator=evaluator,

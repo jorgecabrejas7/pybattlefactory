@@ -72,7 +72,8 @@ VERSION = 2
 T_KINDS = ("rental", "swap")
 
 
-def parse(argv=None):
+def build_parser():
+    """The argument parser (rl.alphazero_v3 extends it)."""
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--name", default=time.strftime("alphazero_v2_%Y%m%d_%H%M%S"))
     p.add_argument("--run-dir", default=None, help="default runs/<name>")
@@ -165,7 +166,11 @@ def parse(argv=None):
                    help="fresh teams kept out for the before / after metrics")
     p.add_argument("--w-refresh-probe", type=int, default=1024, help="fixed probe teams for mean |dW|")
     p.add_argument("--init-from", default=None, help="checkpoint to resume from")
-    a = p.parse_args(argv)
+    return p
+
+
+def parse(argv=None):
+    a = build_parser().parse_args(argv)
     # (rl.alphazero.train_iteration / heldout_stats read these; the tactician is not trained there in v2)
     a.value_mix_t, a.min_batch_t = 0.0, 1
     return a
@@ -201,8 +206,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
     def __init__(self, cfg, seed, evaluator=None):
         self.cfg = cfg
         encode.set_version(cfg["encode_version"])
-        self.net = FactoryNet(cfg["d_emb"], cfg["d"], cfg["layers"], cfg["heads"], share="embeddings",
-                              opt_feat=N_FEAT).eval()
+        self.net = self._make_net(cfg)
         self.norms = {"battler": None, "tactician": None}
         self._local = evaluator is None
         self._local_eval = AZ.local_battler_evaluator(self.net, None)
@@ -212,7 +216,7 @@ class SelfPlayerV2(AZ.SelfPlayer):
                                      c_scale=cfg["c_scale"], rescale=bool(cfg["gumbel_rescale"]),
                                      non_root=cfg["non_root"], c_puct=cfg["c_puct"],
                                      opponent_prior=cfg["opponent_prior"])
-        self.features = TeamFeatures(cfg["team_eval"], cfg["team_eval_module"], shaping=bool(cfg["t_shaping"]))
+        self.features = self._make_features(cfg["team_eval"])
         self.real = REF.RealBattleLog()
         self.rng = random.Random(seed ^ 0xA2)
         self.np_rng = np.random.default_rng(seed + 2)
@@ -222,13 +226,19 @@ class SelfPlayerV2(AZ.SelfPlayer):
         self.traj = []
         self.stats = self._new_stats()
 
+    def _make_net(self, cfg):
+        return FactoryNet(cfg["d_emb"], cfg["d"], cfg["layers"], cfg["heads"], share="embeddings",
+                          opt_feat=N_FEAT).eval()
+
+    def _make_features(self, path, v_next=None):
+        return TeamFeatures(path, self.cfg["team_eval_module"], v_next=v_next, shaping=bool(self.cfg["t_shaping"]))
+
     def set_v_next(self, table):
         self.features.set_v_next(table)
 
     def set_team_eval(self, path):
         """Use another team evaluator checkpoint from the next tactician decision on (a W refresh)."""
-        self.features = TeamFeatures(path, self.cfg["team_eval_module"], v_next=self.features.v_next,
-                                     shaping=bool(self.cfg["t_shaping"]))
+        self.features = self._make_features(path, v_next=self.features.v_next)
         return path
 
     def team_eval_path(self):
@@ -430,7 +440,8 @@ def _stack_t(samples, kind):
             "reward": np.array([t["reward"] for t in s], np.float32), "phi": np.array([t["phi"] for t in s],
                                                                                         np.float32),
             "pi_eval": np.stack([t["pi_eval"] for t in s]).astype(np.float32),
-            "held": np.array([t["held"] for t in s], bool)}
+            "held": np.array([t["held"] for t in s], bool),
+            **({"round": np.array([t["round"] for t in s], np.int64)} if "round" in s[0] else {})}
 
 
 def merge_t(results):
@@ -494,8 +505,28 @@ def tactician_terms(net, kind, x, action):
     return logp, ent, logq, v
 
 
+def tactician_kl(net, data, parts, device):
+    """Approximate KL(pi_old || pi_net) over the training samples (no gradient): mean of (r - 1) - log r."""
+    tot, n = 0.0, 0
+    with torch.no_grad():
+        for kind, idx in parts:
+            d = data[kind]
+            for chunk in np.array_split(idx, max(1, len(idx) // 2048)):
+                x = AZ.to_device(d["obs"], chunk, device)
+                lp, _, _, _ = tactician_terms(net, kind, x, torch.from_numpy(d["action"][chunk]).to(device))
+                lr = lp - torch.from_numpy(d["logp"][chunk]).to(device)
+                tot += float(((torch.exp(lr) - 1) - lr).sum())
+                n += len(chunk)
+    return tot / max(n, 1)
+
+
 def tactician_ppo(net, opt, data, norm, args, device, rng):
-    """PPO epochs on this iteration's tactician samples (rentals and swaps mixed in each minibatch)."""
+    """PPO epochs on this iteration's tactician samples (rentals and swaps mixed in each minibatch).
+
+    alphazero_v3 options (absent from v2's args: v2 behaviour): data[kind]["weight"], a per-sample weight of the
+    policy and imitation terms (hard rounds, --t-round-weight); args.t_kl_target > 0: after the --t-ppo-epochs
+    epochs, more epochs while the approximate KL to the behaviour policy over all the samples stays below it, up to
+    args.t_max_epochs in total."""
     parts = [(k, np.flatnonzero(~data[k]["held"])) for k in T_KINDS if data.get(k) is not None]
     parts = [(k, i) for k, i in parts if len(i)]
     if not parts:
@@ -510,10 +541,21 @@ def tactician_ppo(net, opt, data, norm, args, device, rng):
     stats = collections.defaultdict(list)
     net.train()
     n_mb = max(1, math.ceil(n / args.t_minibatch))
-    for _ in range(args.t_ppo_epochs):
+    weighted = any("weight" in data[k] for k, _ in parts)
+    kl_target = float(getattr(args, "t_kl_target", 0.0) or 0.0)
+    max_epochs = max(int(getattr(args, "t_max_epochs", args.t_ppo_epochs)), args.t_ppo_epochs)
+    epochs, kls = 0, []
+    while True:
+        if epochs >= args.t_ppo_epochs:
+            if kl_target <= 0 or epochs >= max_epochs:
+                break
+            kls.append(tactician_kl(net, data, parts, device))
+            if kls[-1] >= kl_target:
+                break
+        epochs += 1
         perm = rng.permutation(n)
         for mb in np.array_split(perm, n_mb):
-            logp_l, ent_l, v_l, ce_l, old_l, adv_l, ret_l = [], [], [], [], [], [], []
+            logp_l, ent_l, v_l, ce_l, old_l, adv_l, ret_l, w_l = [], [], [], [], [], [], [], []
             for kind in T_KINDS:
                 sel = rows[mb[kinds[mb] == kind]]
                 if not len(sel):
@@ -528,13 +570,21 @@ def tactician_ppo(net, opt, data, norm, args, device, rng):
                 old_l.append(torch.from_numpy(d["logp"][sel]).to(device))
                 adv_l.append(torch.from_numpy(d["adv"][sel]).to(device))
                 ret_l.append(torch.from_numpy(((d["ret"][sel] - norm.mean) / norm.std).astype(np.float32)).to(device))
+                if weighted:
+                    w_l.append(torch.from_numpy(d["weight"][sel].astype(np.float32)).to(device))
             logp, ent, v, ce = torch.cat(logp_l), torch.cat(ent_l), torch.cat(v_l), torch.cat(ce_l)
             old, adv, ret = torch.cat(old_l), torch.cat(adv_l), torch.cat(ret_l)
             a = (adv - adv.mean()) / (adv.std() + 1e-8) if len(adv) > 1 else adv * 0
             ratio = torch.exp(logp - old)
-            pl = -torch.min(ratio * a, torch.clamp(ratio, 1 - args.t_clip, 1 + args.t_clip) * a).mean()
+            surr = torch.min(ratio * a, torch.clamp(ratio, 1 - args.t_clip, 1 + args.t_clip) * a)
             vl = 0.5 * ((v - ret) ** 2).mean()
-            loss = pl + args.t_vf_coef * vl - args.t_ent * ent.mean() + args.t_imitation * ce.mean()
+            if weighted:
+                w = torch.cat(w_l)
+                pl = -(w * surr).mean()
+                loss = pl + args.t_vf_coef * vl - args.t_ent * ent.mean() + args.t_imitation * (w * ce).mean()
+            else:
+                pl = -surr.mean()
+                loss = pl + args.t_vf_coef * vl - args.t_ent * ent.mean() + args.t_imitation * ce.mean()
             opt.zero_grad(set_to_none=True)
             loss.backward()
             gn = torch.nn.utils.clip_grad_norm_(net.parameters(), args.max_grad_norm)
@@ -556,7 +606,14 @@ def tactician_ppo(net, opt, data, norm, args, device, rng):
     out["tactician/advantage_mean"] = float(all_adv.mean())
     out["tactician/return_mean"] = float(all_ret.mean())
     out["tactician/samples"] = n
-    out["tactician/ppo_steps"] = n_mb * args.t_ppo_epochs
+    out["tactician/ppo_steps"] = n_mb * epochs
+    if kl_target > 0:
+        out["tactician/epochs"] = epochs
+        out["tactician/kl_between_epochs"] = float(np.mean(kls)) if kls else float("nan")
+        out["tactician/kl_final"] = kls[-1] if kls and kls[-1] >= kl_target else tactician_kl(net, data, parts, device)
+    if weighted:
+        w = np.concatenate([data[k]["weight"][i] for k, i in parts])
+        out["tactician/weight_min"], out["tactician/weight_max"] = float(w.min()), float(w.max())
     for k, i in parts:
         out[f"tactician_{k}/samples"] = len(i)
     return out
@@ -855,11 +912,14 @@ def log_selfplay_v2(tb, stats, bdata, tdata, made, t_play, weights, step, vnext,
             tb.add_scalar(f"v_next/samples_round_{r}", vcount.get(r, 0), step)
 
 
-def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, with_search, team_eval=None):
+def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, with_search, team_eval=None,
+                       hook=None):
     """Per-round evaluation, network only (greedy), with the tactician's features; optionally network + legal PUCT
-    search (--eval-search-sims, the strict sampler: never factory_sets outside training's self-play)."""
+    search (--eval-search-sims, the strict sampler: never factory_sets outside training's self-play). hook: the
+    environments' obs_hook (default: v2's features, eval_hook)."""
     from .eval_rounds import eval_round, eval_round_inprocess
-    hook = eval_hook(args, v_next, team_eval)
+    if hook is None:
+        hook = eval_hook(args, v_next, team_eval)
     res = {}
     policy = AZ.NetPolicy(net)
     for k in AZ._rounds(args.eval_rounds):

@@ -106,7 +106,7 @@ class GumbelBattler(SearchBattler):
     def __init__(self, evaluator, n_sims=256, n_determinizations=8, batch=32, seed=0, max_considered=16,
                  c_visit=50.0, c_scale=0.1, rescale=True, non_root="gumbel", c_puct=1.5, observer="auto",
                  opponent_prior="strict"):
-        if observer == "auto" and encode.VERSION not in (3, 4):
+        if observer == "auto" and encode.VERSION not in encode.CPP_VERSIONS:
             observer = "python"
         if non_root not in ("gumbel", "puct"):
             raise ValueError(f"non_root must be 'gumbel' or 'puct', not {non_root!r}")
