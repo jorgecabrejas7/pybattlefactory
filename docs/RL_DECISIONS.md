@@ -1299,3 +1299,233 @@ python -m rl.az_bench --v3 --workers 18 --decisions 200 --team-eval runs/team_ev
   +0,166 ± 0,084 victorias donde difieren (1,98 errores típicos; P(mejor) 0,51, correlación prometida/real ≈ 0);
   cambio +0,062 ± 0,077 (no significativo). W ordena todas las opciones mejor que la red (Spearman 0,51–0,54 frente a
   0,45–0,46), pero su favorita no gana claramente más. Veredicto: no justifica imitación (> 0) por la regla de §19.3.
+
+### 20.3 Implementación del evaluador: pistas, W condicionada a la pista y planificador (2026-09-28)
+
+Archivos: `rl/determinize.py` (pista y muestreadores), `rl/team_eval.py` (W_v3, planificador, interfaz v3),
+`rl/team_eval_data.py`, `rl/team_eval_refresh.py`, `rl/team_eval_validate.py`, `rl/tactician_features.py`;
+pruebas en `tests/python/test_team_eval_v3.py`.
+
+#### 20.2.1 La pista del asistente
+
+Definiciones:
+- **Pista**: antes de cada combate normal, el asistente de la Factory dice dos cosas del próximo rival: su **tipo más
+  común** (`hint_type`, 0..17 el tipo; 18 = "ninguno") y su **estilo** (`hint_style`, 0..8). La ven `RentalView`
+  (del primer rival de la ronda), `SwapView` (del siguiente) y `BattleView` (del rival actual).
+- **Estilo**: el juego tiene 7 listas de movimientos (preparación, lento y seguro, aguante, alto riesgo, debilitar,
+  impredecible, clima). **Puntos de un estilo** = cuántos de los 12 movimientos del rival están en su lista (un
+  movimiento en dos listas, Snatch, cuenta solo para la primera). Un estilo **se cumple** si llega a su umbral
+  (3 para los tres primeros, 2 para los demás).
+
+Cómo la calcula el juego (`battle_factory.c`, `GetOpponentMostCommonMonType` / `GetOpponentBattleStyle`), y cómo la
+replica `hint_of_team` al pie de la letra:
+- tipo: se cuentan los tipos de las 3 especies (un tipo doble cuenta sus dos tipos; uno simple, una vez); se
+  recorren los tipos en orden guardando el primero con más cuenta y el último que empató con él; si el primero
+  supera estrictamente al empatado, ese tipo; si no, 18;
+- estilo: ningún estilo cumplido → 0; uno o dos → el último de ellos en el orden de las listas; más de dos → 8
+  ("sin estilo único"; el `encode` del táctico solo tiene 8 casillas, así que ahí el 8 no marca ninguna).
+- Antes del combate de Noland no hay pista (`NO_HINT` = (18, 0), que también es una pista posible de un rival
+  normal: por eso "desconocida" no puede ser (18, 0)).
+
+Prueba contra el juego: en 600 pantallas de alquiler y 40+ pantallas de cambio reales (`SimBackend`), la pista que
+calcula el juego coincide siempre con `hint_of_team` sobre los sets reales del rival (leídos de `gFrontierTempParty`
+solo en la prueba). Frecuencias (1.500 rivales del primer combate de ronda): tipo "ninguno" 65 %, agua 8 %, normal
+5 %; estilo 0 el 42 %, 4 (alto riesgo) el 39 %, estilo 8 una vez.
+
+#### 20.2.2 Muestreadores coherentes con la pista
+
+- **Muestreo por rechazo**: se sortea un equipo rival entero con el muestreador de siempre, se calcula su pista como
+  el juego y solo se acepta si es la pista oída; si no, se vuelve a sortear. Así el equipo aceptado sigue exactamente
+  la distribución del muestreador **condicionada** a la pista (prueba: frecuencias de especies iguales a las de los
+  sorteos libres que por casualidad tienen esa pista).
+- `sample_factory_sets(..., hint=)` (entrenamiento) y `sample_determinization(..., hint=)` (el estricto, inferencia):
+  cuentan todos los Pokémon del rival, también los debilitados ya vistos (sus movimientos no revelados cuentan para el
+  estilo, así que se sortean para la comprobación y luego se dejan como están). Sorteos vectorizados por lotes (64,
+  256, luego 1.024) hasta 4.096 equipos; si ninguno cumple, se usa el último y se cuenta en
+  `hint_stats["fallback"]`. Con Noland, o `hint=None`, todo es como antes (mismo código).
+- Coste: pista común ((18, 4)): 0,9 ms (sets de la Factory) / 2,6 ms (estricto); pistas raras 3–9 ms / 13–46 ms,
+  con algún *fallback* en pistas casi imposibles para ese pool (p. ej. (6, 6): 45 de 100).
+- `battle_hint(view, noland)` da la pista a pasar (None antes de Noland). `determinization(..., hint=)` la reenvía.
+
+#### 20.2.3 W condicionada a la pista (W_v3)
+
+- **W(equipo, ronda, tipo, pista)**: como W (§19.2) pero sabiendo la pista del rival de ese combate. **Pista
+  desconocida**: un símbolo propio (ni (18, 0) ni ninguna pista real) para los combates cuya pista no se ha oído
+  todavía (los futuros), para Noland y para W "sin rival concreto" (E_ronda de los combates siguientes).
+- **Abandono de pista** (*hint dropout*): en el entrenamiento, el 30 % de los combates se presentan con la pista
+  desconocida; así W(· | desconocida) aprende la media sobre las pistas (lo que se espera sin haberla oído).
+- **Red**: la de §19.2.1 (`TeamNet(hint=True)`); la parte del equipo no depende de la pista, así que cada equipo se
+  codifica una vez y la cabeza se evalúa por combate: entrada de la cabeza = [media, líder, ronda, embedding de la
+  pista (tipo 19 + desconocido, estilo 9 + desconocido, sumados), lectura por atención de los 3 Pokémon con una
+  consulta hecha con la pista] → MLP → 3 logits. Pérdida: BCE por combate (con una sola pista por equipo es la
+  binomial de v1). Una W de v1 (sin pista) sigue funcionando en todas partes: la pista se ignora.
+- **Datos** (`rl.team_eval_data`, con el combatiente de alphazero_v2): cada combate guarda la pista de su rival
+  (`hint_of_team` de los sets sorteados; NO_HINT para Noland) y el combatiente la ve en su observación, como en un
+  combate real.
+
+**Datos** (`runs/team_eval_v3/data`, 45 minutos con 18 procesos, combatiente `runs/alphazero_v2/latest.pt` voraz y
+sin búsqueda): **1.354.324 equipos, 21,6 millones de combates** (8.000 combates/s; 16 por equipo), 0,13 % cortados.
+**Entrenamiento**: 8 épocas, lotes de 2.048 equipos (todos sus combates), lr 2·10⁻³ *one-cycle*, abandono de pista
+0,3 (143 s en la GPU; 630.000 parámetros). Validación: 5 % de los equipos (67.716; 1,08 M combates), separados por
+equipo.
+
+Medidas (definidas en §19.2.1: calibración, Brier, AUC). "Con pista" = cada combate con la pista de su rival;
+"desconocida" = la misma red con el símbolo desconocido (lo que se espera sin haber oído la pista):
+
+| | Brier con pista | Brier desconocida | Brier constante | AUC con pista | AUC desconocida |
+|---|---|---|---|---|---|
+| Todos los combates | 0,1427 | 0,1446 | 0,1742 | 0,775 | 0,766 |
+| Combates normales (sin Noland, que no tiene pista) | 0,1288 | 0,1310 | 0,1483 | 0,747 | 0,735 |
+
+Calibración (deciles de W predicha, con pista): predicho 0,389 / 0,561 / 0,670 / 0,752 / 0,813 / 0,855 / 0,888 /
+0,915 / 0,939 / 0,967, observado 0,392 / 0,563 / 0,670 / 0,754 / 0,814 / 0,856 / 0,887 / 0,913 / 0,938 / 0,966. A
+nivel de equipo (pista desconocida) explica el 98 % de la varianza real entre equipos (correlación 0,87).
+
+Por pista (combates normales; Brier con pista / desconocida; AUC con pista / desconocida):
+
+| Pista | Combates | Victorias | Brier | AUC |
+|---|---|---|---|---|
+| tipo "ninguno" (18) | 610.234 | 0,822 | 0,1289 / 0,1294 | 0,739 / 0,736 |
+| agua | 78.152 | 0,796 | 0,1394 / 0,1450 | 0,746 / 0,724 |
+| psíquico | 44.898 | 0,786 | 0,1403 / 0,1449 | 0,768 / 0,749 |
+| normal | 39.217 | 0,830 | 0,1259 / 0,1280 | 0,732 / 0,715 |
+| tierra | 30.415 | 0,835 | 0,1178 / 0,1247 | 0,762 / 0,720 |
+| planta | 17.927 | 0,872 | 0,0996 / 0,1083 | 0,748 / 0,684 |
+| fuego | 17.912 | 0,849 | 0,1064 / 0,1133 | 0,785 / 0,757 |
+| dragón | 4.794 | 0,650 | 0,1799 / 0,2013 | 0,774 / 0,749 |
+| estilo 0 (ninguno) | 377.538 | 0,806 | 0,1341 / 0,1364 | 0,754 / 0,743 |
+| estilo 4 (alto riesgo) | 356.656 | 0,820 | 0,1305 / 0,1322 | 0,733 / 0,722 |
+| estilo 2 (lento y seguro) | 102.420 | 0,837 | 0,1209 / 0,1231 | 0,741 / 0,727 |
+
+(el resto de tipos y estilos, en `runs/team_eval_v3/model_heldout.json`; todos mejoran con la pista.)
+
+**¿Mejora la pista?** Sí, pero poco en media: en los combates normales el Brier baja un 1,7 % (0,1310 → 0,1288) y
+el AUC sube 0,012; es el 13 % de lo que W ya mejora sobre la constante. Casi toda la ganancia está en el 35 % de
+combates con un tipo concreto (p. ej. dragón: Brier 0,201 → 0,180, y W pasa de 0,75 a 0,65, la tasa real; planta:
+AUC 0,68 → 0,75): ahí la pista dice mucho del rival. Con tipo "ninguno" (65 %) apenas cambia nada. Por ronda, el AUC
+con pista sube 0,014–0,03 en todas las casillas normales / último.
+
+#### 20.2.4 El planificador (Q_plan)
+
+Definiciones, de abajo arriba:
+- **Hoja**: V₀(T, k) = Φ = E_ronda + P(completar) · V_siguiente desde el combate k, con p_k = W(· | pista de k) y
+  los siguientes con la pista desconocida.
+- **Opciones de cambio** tras ganar al rival del combate k: quedarse, o uno de los 3×3 cambios con los Pokémon de ese
+  rival, vistos como se ven en la pantalla de cambio (el enmascarado del generador de datos: movimientos revelados,
+  objeto y habilidad con las frecuencias medidas; estadísticas desconocidas); el nuevo ocupa el hueco del que sale.
+- **Valor con planificación** (expectimax de profundidad D):
+  V_D(T, k) = p_k(T | h_k) · (1 + media sobre rivales r de [ máx sobre opciones o de V_{D−1}(T ⊕ o, k+1) ])
+  para k < 7; en k = 7, o con D = 0, la hoja. Los rivales r del combate k se sortean del pool de la ronda como los
+  sortea el juego (sin especies repetidas ni objetos repetidos, sin las especies que hay en pantalla) y coherentes
+  con la pista oída h_k; más adelante las pistas son desconocidas y los rivales del combate k+1 excluyen además las
+  especies del rival r.
+- **Números aleatorios comunes**: los mismos rivales (y el mismo enmascarado) para todas las opciones de una
+  decisión, para que las diferencias entre opciones no sean ruido del sorteo.
+- **Haz (beam) en profundidad 2**: para cada (opción, rival) solo se expanden las 3 mejores opciones del nivel 1
+  según V₀. Como V₁ ≥ V₀ (quedarse siempre es posible), V₂ ≥ V₁ ≥ V₀ con los mismos sorteos (probado).
+- **Q_plan(opción)** = V_D(equipo tras la opción, k). Con D = 0 es Φ con pista (Q_eval de §19.3).
+- Por defecto: D = 1, 8 rivales, (D = 2: 4 rivales del nivel 2 por rival, haz 3). Todas las W de una decisión se
+  calculan de una vez sobre los equipos distintos (se deduplican).
+
+Prueba de la definición: para varias opciones de alquiler y cambio, un cálculo a mano con bucles (objetos `Team`,
+`ev.w`) da exactamente el mismo Q_plan que el cálculo vectorizado.
+
+**Coste** (ms por decisión, W_v3 = `runs/team_eval_v3/model.pt`, 1 hilo, máquina libre; 10 decisiones de cada
+clase; "equipos" = equipos distintos evaluados por la red):
+
+| | alquiler CPU | cambio CPU | alquiler GPU | cambio GPU | equipos (alquiler / cambio) |
+|---|---|---|---|---|---|
+| Profundidad 0 (Φ) | 5 | 2 | — | — | 60 / 10 |
+| **Profundidad 1** (8 rivales) | **63** | **19** | 8 | 4 | 1.560 / 510 |
+| Profundidad 2 (8 × 4 rivales, haz 3) | 522 | 167 | 32 | 13 | 12.600 / 4.540 |
+
+Casi todo el coste es la red (el transformer de W, ~40 µs por equipo en un hilo). Con 18 procesos a la vez (la
+validación de abajo) la profundidad 1 costó 106 / 36 ms y la 2, 939 / 232 ms. **Recomendación: `{}` = profundidad 1,
+8 rivales** (en CPU, ~60 ms por alquiler y ~20 ms por cambio, pequeño frente a los combates); la profundidad 2 no
+eligió mejor en la validación y cuesta 8–9 veces más (solo tendría sentido con W en la GPU).
+
+#### 20.2.5 Interfaz para el entrenador (`rl.team_eval`, también `TeamFeaturesV3` en `rl.tactician_features`)
+
+```
+N_OPT_FEATURES = 7;  WIN_SCALE = 10
+option_features_v3(ev, view, kind, ctx, options, v_next_table, hint, planner_cfg) -> [n_opt, 7] (float32)
+    # [E_ronda | pista, W(normal | pista), W(último o Noland), Δ, Q_plan, Q_plan − media(Q_plan), Φ con pista]
+    # las columnas en victorias (0, 3, 4, 5, 6) van divididas por WIN_SCALE: entradas de orden 1 para la red
+phi_v3(ev, view, kind, ctx, v_next_table, hint, planner_cfg) -> float          # en victorias
+    # cambio: Q_plan del equipo actual (quedarse); alquiler: media de Q_plan sobre los alquileres legales
+q_eval_v3(features) -> [n_opt]   # Q_plan en victorias (columna 4 × WIN_SCALE)
+generate_battles(...), probe_teams(...)   # para el refresco de W (combates con pista)
+```
+`v_next_table[r]` = victorias esperadas desde el inicio de la ronda r (se usa `table[challenge + 2]`, la ronda
+siguiente); `hint` = (hint_type, hint_style) de la vista, o None; `planner_cfg` = `PlannerConfig` o dict
+(`depth`, `n_opp`, `n_opp2`, `beam`, `seed`). `phi_v3` reutiliza el plan de `option_features_v3` de la misma decisión.
+`TeamFeaturesV3(path, planner_cfg=..., v_next=...)` hace lo mismo desde un backend (toma la pista de la vista y la
+anula antes de Noland) y sirve de `obs_hook`. El refresco (`team_eval_refresh`) funciona igual con W_v3: los
+combates generados y los reales guardan la pista y el ajuste fino usa la misma pérdida por combate con abandono 0,3.
+
+#### 20.2.6 Validación en el juego real (condición de §19.3), agentes de alphazero_v2
+
+`python -m rl.team_eval_validate run --version 3` (`runs/team_eval_v3/validate.pkl`, 942 s con 18 procesos). La
+prueba de §19.2.1 con los agentes de v2:
+- **π_red**: el argmax de la red del táctico de alphazero_v2 (sus rasgos por opción, de la W con la que se entrenó,
+  `team_eval_0188.pt`). **Criterios** (argmax, con la pista del próximo combate y W_v3): Q_plan de profundidad 1
+  (`q_plan1`) y 2 (`q_plan2`), Φ con pista (`phi_h`, profundidad 0) y E_ronda con pista (`e_round`, sin V_siguiente).
+- **Estados**: 126 alquileres (primera decisión de rachas desde la ronda 1) y 126 cambios de las rondas 3–5 (sin los
+  de antes de Noland), de partidas de v2 (combatiente voraz, táctico muestreado). **Resultado real**: 64 semillas
+  emparejadas por opción, jugando hasta el final de la ronda con el combatiente y el táctico de v2 voraces (con sus
+  rasgos). Se juegan todos los cambios y, en el alquiler, la unión de las 6 mejores opciones de la red y de cada
+  criterio (10,8 de media). V_siguiente = la tabla del checkpoint de v2 (se usa también en "Φ real").
+- Columnas como en §19.2.1: ganancia de π_eval sobre π_red donde eligen distinto (± error típico entre estados), en
+  todos los estados, P(mejor) donde difieren y correlación entre la ganancia prometida (diferencia de la puntuación)
+  y la real.
+
+| | Criterio | Difieren | Ganancia donde difieren | En todos | P(mejor) | Corr. prometida/real |
+|---|---|---|---|---|---|---|
+| Alquiler, victorias | q_plan1 | 111/126 | **+0,185 ± 0,077** (2,4 SE) | +0,163 ± 0,068 | 0,60 | −0,05 |
+| | q_plan2 | 109/126 | **+0,193 ± 0,080** (2,4 SE) | +0,167 ± 0,069 | 0,58 | −0,02 |
+| | phi_h | 110/126 | +0,151 ± 0,079 (1,9 SE) | +0,131 ± 0,069 | 0,54 | +0,03 |
+| | e_round | 110/126 | +0,148 ± 0,079 (1,9 SE) | +0,129 ± 0,069 | 0,55 | +0,03 |
+| Alquiler, Φ real | q_plan1 | 111/126 | **+0,54 ± 0,24** (2,3 SE) | +0,48 ± 0,21 | 0,59 | −0,08 |
+| | q_plan2 | 109/126 | **+0,56 ± 0,24** (2,3 SE) | +0,48 ± 0,21 | 0,57 | −0,04 |
+| | phi_h | 110/126 | +0,43 ± 0,25 (1,8 SE) | +0,38 ± 0,21 | 0,58 | −0,00 |
+| | e_round | 110/126 | +0,42 ± 0,24 (1,7 SE) | +0,37 ± 0,21 | 0,57 | −0,01 |
+| Cambio, victorias | q_plan1 | 81/126 | +0,109 ± 0,064 (1,7 SE) | +0,070 ± 0,041 | 0,57 | +0,23 |
+| | q_plan2 | 80/126 | +0,075 ± 0,054 (1,4 SE) | +0,048 ± 0,035 | 0,57 | +0,32 |
+| | phi_h | 75/126 | +0,058 ± 0,051 (1,1 SE) | +0,035 ± 0,030 | 0,55 | +0,12 |
+| | e_round | 78/126 | +0,068 ± 0,049 (1,4 SE) | +0,042 ± 0,030 | 0,56 | +0,11 |
+| Cambio, Φ real | q_plan1 | 81/126 | **+0,34 ± 0,16** (2,1 SE) | +0,22 ± 0,10 | 0,57 | +0,32 |
+| | q_plan2 | 80/126 | +0,25 ± 0,15 (1,7 SE) | +0,16 ± 0,09 | 0,56 | +0,40 |
+| | phi_h | 75/126 | +0,18 ± 0,14 (1,3 SE) | +0,11 ± 0,08 | 0,53 | +0,20 |
+| | e_round | 78/126 | +0,21 ± 0,14 (1,5 SE) | +0,13 ± 0,08 | 0,54 | +0,12 |
+
+Victorias medias hasta el final de la ronda: alquiler: red 5,89, q_plan1 6,05, q_plan2 6,06, phi_h 6,02, e_round
+6,02 (la mejor opción jugada, 6,46); cambio: red 3,74, q_plan1 3,81, q_plan2 3,79, phi_h 3,78, e_round 3,79 (4,10).
+Comparaciones directas entre criterios (misma prueba, todos los estados): q_plan1 − phi_h = +0,031 ± 0,024
+(alquiler) y +0,035 ± 0,024 (cambio) victorias; q_plan2 − q_plan1 = +0,004 ± 0,023 y −0,022 ± 0,022.
+
+**Veredicto** (criterio de §19.3: > 2 errores típicos mejor que la red):
+- **q_plan1 (profundidad 1): sí en el alquiler** (2,4 SE en victorias, 2,3 SE en Φ real); **en el cambio, solo en Φ
+  real** (2,1 SE; 1,7 SE en victorias). Es el mejor criterio en el cambio y casi el mejor en el alquiler
+  (q_plan2, +0,01).
+- **q_plan2**: sí en el alquiler (2,4 / 2,3 SE), no en el cambio (1,4 / 1,7 SE); no mejora a la profundidad 1.
+- **phi_h y e_round** (W_v3 sin planificar): no (1,1–1,9 SE), aunque ahora siempre por delante de la red (con v1 y
+  la W de v1 daban +1,2 y −0,4 SE, §19.2.1).
+- Planificar añade poco sobre Φ con pista (+0,03 victorias, 1,3–1,5 SE) y la diferencia prometida apenas predice la
+  real en el alquiler (correlación ≈ 0; en el cambio 0,2–0,4). Con 16 comparaciones, un 2,1–2,4 SE aislado podría
+  ser suerte; lo robusto es que todos los criterios con W_v3 salen por delante de la red de v2 y que Q_plan
+  (profundidad 1 o 2) va por delante de phi_h y e_round en las cuatro tablas.
+- Para el entrenador: q_plan1 cumple la condición de §19.3 en el alquiler (y en el cambio en unidades de Φ), así
+  que puede darse un coeficiente de imitación pequeño con **π_eval = softmax(Q_plan de profundidad 1 / T)**; la
+  profundidad 2 no aporta y cuesta 8 veces más. Nota: la prueba compara contra la red de v2 al final de su
+  entrenamiento; la red de v3 empieza desde cero, así que al principio el experto le sacará más ventaja.
+
+### 20.4 Lanzamiento de alphazero_v3 (2026-09-28)
+- W_v3 (`runs/team_eval_v3/model.pt`, combatiente de v2, pistas) y planificador de profundidad 1 (8 rivales), la
+  configuración por defecto: la profundidad 2 no añade nada en la validación y cuesta ~8× más.
+- **Imitación**: el planificador de profundidad 1 elige mejor que el táctico de v2 en el juego real en los alquileres
+  (+0,185 ± 0,077 victorias, 2,4 errores típicos) y en los cambios en unidades de Φ (2,1; 1,7 en victorias), y todos
+  los criterios de W_v3 van por delante de la red. Cumple la condición de §19.3 en los alquileres: se activa la
+  imitación con un coeficiente pequeño, `--t-imitation 0.1` (π_eval = softmax(Q_plan / T), T = 0,5 victorias), para
+  que la experiencia real (PPO) siga pudiendo corregir al experto.
+- Estilo de pista 8 ("más de dos estilos"): queda fuera de las 8 casillas del one-hot y se codifica como todo ceros,
+  que es distinguible de "sin pista" (estilo 0): no se pierde información.
