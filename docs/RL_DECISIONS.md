@@ -1287,3 +1287,15 @@ python -m rl.alphazero_v3 --name alphazero_v3 --team-eval runs/team_eval_v3/mode
     [--team-eval-module rl.team_eval_v3] [--planner-cfg '{"depth": 1}'] [--t-imitation 0]   # resto por defecto
 python -m rl.az_bench --v3 --workers 18 --decisions 200 --team-eval runs/team_eval_v3/model.pt
 ```
+
+### 20.2 Pruebas previas a alphazero_v3 (2026-09-28, `runs/diag_v3/`)
+- **T1, capacidad del combatiente con objetivos de Gumbel.** 324 k decisiones del autojuego de v2; redes desde cero de
+  1,3 M, 5,5 M y 14,2 M parámetros, validación agrupada por combate. Mejor KL(objetivo‖red) en validación: 0,747 /
+  0,748 / 0,738 (la red de v2, con ~7,7 M decisiones, 0,677). Las tres sobreajustan desde la época 8; lo que baja la
+  KL es la cantidad de datos (25/50/100 %: 0,82/0,77/0,73), no el tamaño. **Suelo de ruido**: dos búsquedas del mismo
+  estado eligen la misma acción solo el 61 % de las veces; KL(objetivo ‖ objetivo medio de 8 búsquedas) ≈ 0,38–0,43,
+  que ninguna red puede quitar. Veredicto: **no se agranda la red**; la KL ~0,68 de v2 es sobre todo ruido del objetivo.
+- **T2, W_final de v2 (`team_eval_0188`) frente al táctico de v2 en el juego real** (protocolo §19.2.1): alquiler
+  +0,166 ± 0,084 victorias donde difieren (1,98 errores típicos; P(mejor) 0,51, correlación prometida/real ≈ 0);
+  cambio +0,062 ± 0,077 (no significativo). W ordena todas las opciones mejor que la red (Spearman 0,51–0,54 frente a
+  0,45–0,46), pero su favorita no gana claramente más. Veredicto: no justifica imitación (> 0) por la regla de §19.3.
