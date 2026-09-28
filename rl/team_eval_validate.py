@@ -19,6 +19,16 @@ The same real-game test as runs/diag_az1 (tsearchB.py / tsearch_diag.py Q3):
 V_NEXT: expected wins from the start of round r + 1 under alphazero_v1 greedy play (battler and tactician): the mean
 Monte Carlo return at the rental decisions of streak 7r in runs/diag_az1/q1_az_allgreedy.npz (45,000 tactician
 decisions; SE 0.12-0.26 for rounds 2-6, 0.40 for round 7).
+
+alphazero_v3's planner (docs §20; `run --version 3`): the same test with the alphazero_v2 agents (its checkpoint:
+battler and tactician network, whose per-option inputs come from the W it was trained with, --net-team-eval), the
+hint-aware W_v3 (--evaluator) and v_next = the v2 checkpoint's table (table[r + 1]). Criteria, each an argmax over
+the options (option_features_v3 with the attendant's hint of the next battle):
+    q_plan1   Q_plan, planner depth 1          q_plan2   Q_plan, planner depth 2
+    phi_h     Phi with the hint (depth 0)      e_round   E_round with the hint (no v_next)
+    python -m rl.team_eval_validate run --version 3 --ckpt runs/alphazero_v2/latest.pt \
+        --net-team-eval runs/alphazero_v2/team_eval_0188.pt --evaluator runs/team_eval_v3/model.pt \
+        --out runs/team_eval_v3/validate.pkl
 """
 
 import argparse
@@ -53,7 +63,8 @@ def load_net(path):
     ck = torch.load(path, map_location="cpu", weights_only=False)
     a = ck["args"]
     encode.set_version(a.get("encode_version", 2))
-    net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "embeddings")).eval()
+    net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "embeddings"),
+                     opt_feat=a.get("opt_feat", 0)).eval()
     net.load_state_dict(ck["net"])
     return net, (ck.get("value_norm") or {}).get("battler")
 
@@ -77,9 +88,10 @@ def t_logits(net, kind, obs):
         return lg[0].numpy()
 
 
-def rollouts(net, beval, backend, kind, options, seeds, max_decisions=300):
+def rollouts(net, beval, backend, kind, options, seeds, max_decisions=300, obs_hook=None):
     """Each (option, seed) played in the real game with the battler greedy and the tactician greedy until the
-    current round ends (runs/diag_az1/tsearch_diag.py rollouts). -> wins [n_opt, n_seeds], truncated count."""
+    current round ends (runs/diag_az1/tsearch_diag.py rollouts). obs_hook: the tactician's per-option inputs
+    (alphazero_v2's TeamFeatures). -> wins [n_opt, n_seeds], truncated count."""
     from pybattle.backend import Phase
     from rl import encode
     from rl.envs import decode_action
@@ -108,6 +120,8 @@ def rollouts(net, beval, backend, kind, options, seeds, max_decisions=300):
                     k = "rental" if be.phase == Phase.RENTAL else "swap"
                     view = be.view()
                     obs = encode.rental(view, ctx_of(be)) if k == "rental" else encode.swap(view, ctx_of(be))
+                    if obs_hook is not None:
+                        obs = obs_hook(be, k, obs, ctx_of(be))
                     be.act(decode_action(k, net_action(net, k, obs, greedy=True)))
                     r["ndec"] = 0
                     continue
@@ -220,6 +234,81 @@ def worker(args):
     return out
 
 
+def worker3(args):
+    """alphazero_v3's validation (see the module docstring): v2 agents, W_v3 criteria."""
+    (wid, per_proc, n_seeds, seed, ev_path, ckpt, net_te, out_dir, top, n_opp, n_opp2, beam) = args
+    torch.set_num_threads(1)
+    from rl.alphazero import local_battler_evaluator
+    from rl.envs import FactoryEnv
+    from rl.tactician_features import TeamFeatures, v_next_of
+    from rl.tactician_search import option_logp, options_of
+    from rl import team_eval as T
+    net, bnorm = load_net(ckpt)
+    beval = local_battler_evaluator(net, bnorm)
+    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+    table = list(ck["v_next"]["table"])
+    hook = TeamFeatures(net_te, "rl.team_eval", v_next=table, shaping=False)
+    ev = T.TeamEvaluator.load(ev_path)
+    rng = random.Random(seed)
+    out = []
+    path = os.path.join(out_dir, f"validate3_w{wid:02d}.pkl")
+    for kind in ("rental", "swap"):
+        if kind == "rental":
+            env = FactoryEnv(seed, gamma=1.0, beta=0.0, max_decisions=300, start_p0=1.0, obs_hook=hook)
+            want = lambda k, s, r: k == "rental" and s == 0                                     # noqa: E731
+        else:
+            env = FactoryEnv(seed + 7, gamma=1.0, beta=0.0, max_decisions=300, win_streak=14, obs_hook=hook)
+            want = lambda k, s, r: (k == "swap" and 14 <= s < 35                                  # noqa: E731
+                                    and not env.backend.run_info().noland and r.random() < 0.5)
+        n = 0
+        for k, obs, streak in stream(net, env, rng, want):
+            if kind == "swap":
+                env.win_streak = 7 * rng.choice([2, 3, 4])
+            be = env.backend
+            view, ctx = be.view(), ctx_of(be)
+            opts = options_of(k, obs)
+            logp = option_logp(k, t_logits(net, k, obs), opts)
+            hint = (int(view.hint_type), int(view.hint_style))
+            vn = v_next_of(table, ctx)
+            scores, ms = {}, {}
+            for name, depth in (("q_plan1", 1), ("q_plan2", 2)):
+                t0 = time.time()
+                T._LAST_PLAN.clear()
+                f = T.option_features_v3(ev, view, k, ctx, opts, table, hint,
+                                         dict(depth=depth, n_opp=n_opp, n_opp2=n_opp2, beam=beam,
+                                              seed=rng.getrandbits(32)))
+                ms[name] = 1000 * (time.time() - t0)
+                scores[name] = T.q_eval_v3(f)
+                if depth == 1:
+                    scores["phi_h"] = f[:, 6].astype(np.float64) * T.WIN_SCALE
+                    scores["e_round"] = f[:, 0].astype(np.float64) * T.WIN_SCALE
+                    feats = f
+            if k == "swap" or top <= 0:
+                sel = list(range(len(opts)))
+            else:
+                sel = set(np.argsort(-np.asarray(logp), kind="stable")[:top].tolist())
+                for sc in scores.values():
+                    sel |= set(np.argsort(-np.asarray(sc), kind="stable")[:top].tolist())
+                sel = sorted(sel)
+            seeds = [rng.getrandbits(32) for _ in range(n_seeds)]
+            t1 = time.time()
+            w, nt = rollouts(net, beval, be, k, [opts[i] for i in sel], seeds, obs_hook=hook)
+            rec = {"kind": k, "streak": streak, "n_options": len(opts), "sel": sel, "logp": logp, "scores": scores,
+                   "feats": feats, "wins": w, "trunc": nt, "v_next": vn, "hint": hint,
+                   "remaining": 7 - streak % 7, "plan_ms": ms}
+            out.append(rec)
+            pickle.dump(out, open(path, "wb"))
+            j = {i: n_ for n_, i in enumerate(sel)}
+            a_n, a_p = int(np.argmax(logp)), int(np.argmax(scores["q_plan1"]))
+            print(f"[w{wid}] {k} streak {streak} opts {len(opts)} played {len(sel)}: net {w[j[a_n]].mean():.2f} "
+                  f"q_plan1 {w[j[a_p]].mean():.2f} best {w.mean(1).max():.2f} ({time.time() - t1:.0f}s; plan "
+                  f"{ms['q_plan1']:.0f} / {ms['q_plan2']:.0f} ms)", flush=True)
+            n += 1
+            if n >= per_proc:
+                break
+    return out
+
+
 # ---- analysis --------------------------------------------------------------------------------------------------------------
 
 def _real(rec, units):
@@ -236,6 +325,13 @@ def _spearman(a, b):
     return float(np.corrcoef(ra, rb)[0, 1])
 
 
+def _criteria(rec):
+    """Old records: q_phi / q_e fields; v3 records: a "scores" dict."""
+    if "scores" in rec:
+        return rec["scores"]
+    return {"q_phi": rec["q_phi"], "q_e": rec["q_e"]}
+
+
 def analyze(recs, out=print):
     rows = {}
     for kind in ("rental", "swap"):
@@ -246,24 +342,25 @@ def analyze(recs, out=print):
             f"options {np.mean([r['n_options'] for r in R]):.1f} (played {np.mean([len(r['sel']) for r in R]):.1f}), "
             f"truncated rollouts {sum(r['trunc'] for r in R)}")
         for units in ("wins", "phi"):
-            for crit in ("q_phi", "q_e"):
+            for crit in _criteria(R[0]):
                 gains, claimed, allg, pb = [], [], [], []
                 top3, top3_net, top1, top1_net, sp_eval, sp_net, regret_e, regret_n = [], [], [], [], [], [], [], []
                 for r in R:
                     j = {i: n for n, i in enumerate(r["sel"])}
                     real = _real(r, units)                                  # [n_sel, seeds]
                     m = real.mean(1)
-                    a_n, a_e = int(np.argmax(r["logp"])), int(np.argmax(r[crit]))
+                    sc = _criteria(r)[crit]
+                    a_n, a_e = int(np.argmax(r["logp"])), int(np.argmax(sc))
                     d = real[j[a_e]] - real[j[a_n]]
                     g = float(d.mean())
                     allg.append(g)
                     if a_e != a_n:
                         gains.append(g)
-                        claimed.append(float(r[crit][a_e] - r[crit][a_n]))
+                        claimed.append(float(sc[a_e] - sc[a_n]))
                         pb.append(g > 0)
                     best = int(np.argmax(m))
                     sel = np.array(r["sel"])
-                    qe, lp = np.asarray(r[crit])[sel], np.asarray(r["logp"])[sel]
+                    qe, lp = np.asarray(sc)[sel], np.asarray(r["logp"])[sel]
                     top3.append(best in np.argsort(-qe, kind="stable")[:3])
                     top3_net.append(best in np.argsort(-lp, kind="stable")[:3])
                     top1.append(best == int(np.argmax(qe)))
@@ -287,7 +384,7 @@ def analyze(recs, out=print):
                        "spearman_net": float(np.nanmean(sp_net)) if sp_net else float("nan"),
                        "regret_eval": float(np.mean(regret_e)), "regret_net": float(np.mean(regret_n))}
                 rows[(kind, units, crit)] = row
-                out(f"  [{units:4s} | pi_eval = argmax {crit:5s}] differs {len(gains)}/{len(R)}: gain "
+                out(f"  [{units:4s} | pi_eval = argmax {crit:7s}] differs {len(gains)}/{len(R)}: gain "
                     f"{row['gain_differ']:+.3f} +- {se:.3f} (all states {row['gain_all']:+.3f} +- {se_all:.3f}), "
                     f"P(better) {row['p_better']:.2f}, corr(claimed, real) {corr:+.2f} | best option in top-3: eval "
                     f"{row['top3_eval']:.2f} net {row['top3_net']:.2f}; top-1: eval {row['top1_eval']:.2f} net "
@@ -309,6 +406,12 @@ def main():
     p.add_argument("--out", default="runs/team_eval_v1/validate.pkl")
     p.add_argument("--top", type=int, default=TOP, help="rentals: play the union of the top-N options by each "
                    "score (0: every legal rental)")
+    p.add_argument("--version", type=int, default=2, help="3: alphazero_v3's planner with the v2 agents")
+    p.add_argument("--net-team-eval", default="runs/alphazero_v2/team_eval_0188.pt",
+                   help="(--version 3) the W the tactician network was trained with (its per-option inputs)")
+    p.add_argument("--n-opp", type=int, default=8)
+    p.add_argument("--n-opp2", type=int, default=4)
+    p.add_argument("--beam", type=int, default=3)
     a = p.parse_args()
     if a.mode == "analyze":
         analyze(pickle.load(open(a.path or a.out, "rb")))
@@ -316,9 +419,16 @@ def main():
     t0 = time.time()
     out_dir = os.path.dirname(os.path.abspath(a.out))
     os.makedirs(out_dir, exist_ok=True)
-    jobs = [(w, a.per_proc, a.seeds, a.seed + 101 * w, a.evaluator, a.ckpt, out_dir, a.top) for w in range(a.procs)]
+    if a.version == 3:
+        fn = worker3
+        jobs = [(w, a.per_proc, a.seeds, a.seed + 101 * w, a.evaluator, a.ckpt, a.net_team_eval, out_dir, a.top,
+                 a.n_opp, a.n_opp2, a.beam) for w in range(a.procs)]
+    else:
+        fn = worker
+        jobs = [(w, a.per_proc, a.seeds, a.seed + 101 * w, a.evaluator, a.ckpt, out_dir, a.top)
+                for w in range(a.procs)]
     with mp.get_context("spawn").Pool(a.procs) as pool:
-        res = [r for chunk in pool.map(worker, jobs, chunksize=1) for r in chunk]
+        res = [r for chunk in pool.map(fn, jobs, chunksize=1) for r in chunk]
     pickle.dump(res, open(a.out, "wb"))
     print(f"saved {len(res)} records to {a.out} ({time.time() - t0:.0f}s)")
     analyze(res)

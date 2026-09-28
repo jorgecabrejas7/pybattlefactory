@@ -25,7 +25,9 @@ ones finish); the evaluator is the GPU inference server (--inference gpu) or a C
 
 Output: one .npz per worker chunk: per team round, btype (0 normal, 1 last, 2 Noland), battle (1..7), rents,
 species / moves / item / ability / stats [3, ...] (party order, slot 0 leads), set_id, swapped; per battle b_team,
-b_won, b_trunc, b_decisions. meta.json: battler checkpoint, settings, throughput.
+b_won, b_trunc, b_decisions, b_hint_type / b_hint_style (alphazero_v3, §20: the attendant's hint about that
+battle's opponent, rl.determinize.hint_of_team of the drawn sets; NO_HINT for Noland; -1 = not recorded). The
+battler's observation carries that hint, as in a real battle. meta.json: battler checkpoint, settings, throughput.
 """
 
 import argparse
@@ -134,8 +136,10 @@ def make_case(rng, p_swap=0.5, open_level=True, round_type=None):
     return be, own, know, rec
 
 
-def start_battle(be, own, know, rng, open_level=True):
-    """A clone of the case's backend with a fresh opponent drawn from the Factory's sets and a reseeded RNG."""
+def start_battle(be, own, know, rng, open_level=True, with_hint=False):
+    """A clone of the case's backend with a fresh opponent drawn from the Factory's sets and a reseeded RNG.
+    with_hint: also return the attendant's hint about that opponent ((hint_type, hint_style), rl.determinize.
+    hint_of_team of the drawn sets: what the game would say; NO_HINT for Noland, who gets none)."""
     from .tactician_search import _unseen_view
     c = be.clone()
     g = c.game
@@ -147,6 +151,8 @@ def start_battle(be, own, know, rng, open_level=True):
     g.set_rng(rng.getrandbits(32))
     c.opponent_knowledge = know
     c.phase = Phase.BATTLE
+    if with_hint:
+        return c, (DET.NO_HINT if know.noland else DET.hint_of_team(specs))
     return c
 
 
@@ -160,6 +166,7 @@ class Generator:
         self.bpt, self.conc, self.p_swap = battles_per_team, concurrency, p_swap
         self.teams, self.battles = [], []                    # finished records
         self.active = []
+        self.hints = {}                                      # id(active battle) -> its opponent's hint
         self.n_teams = 0
 
     def _add_case(self):
@@ -168,7 +175,11 @@ class Generator:
         tid = len(self.teams)
         self.teams.append(rec)
         for _ in range(self.bpt):
-            s = _Sim(start_battle(be, own, know, self.rng), tid, self.sim.cpp)
+            c, hint = start_battle(be, own, know, self.rng, with_hint=True)
+            s = _Sim(c, tid, self.sim.cpp)
+            # the battler sees the attendant's hint in its observation, as in a real battle
+            s.obs = type(s.obs)(*hint)
+            self.hints[id(s)] = hint
             self.sim._run(s)
             self.active.append(s)
 
@@ -205,7 +216,8 @@ class Generator:
         still = []
         for s in self.active:
             if s.done:
-                self.battles.append((s.tag, s.won, s.trunc, s.ndec))
+                ht, hs = self.hints.pop(id(s))
+                self.battles.append((s.tag, s.won, s.trunc, s.ndec, ht, hs))
             else:
                 still.append(s)
         self.active = still
@@ -221,7 +233,7 @@ class Generator:
         self.battles = [b for b in self.battles if b[0] not in remap]
         for i in done_ids:
             self.teams[i] = None
-        return teams, [(remap[t], w, tr, nd) for t, w, tr, nd in bat]
+        return teams, [(remap[b[0]],) + tuple(b[1:]) for b in bat]
 
 
 def to_arrays(teams, battles):
@@ -234,11 +246,14 @@ def to_arrays(teams, battles):
     for k in ("round", "btype", "battle"):
         out[k] = out[k].astype(np.int8)
     out["rents"] = out["rents"].astype(np.int16)
-    b = np.array(battles, np.int64).reshape(-1, 4)
+    # a battle: (team, won, truncated, decisions[, hint_type, hint_style]); without a hint: unknown (-1)
+    b = np.array([tuple(x) + (-1, -1) * (len(x) == 4) for x in battles], np.int64).reshape(-1, 6)
     out["b_team"] = b[:, 0].astype(np.int32)
     out["b_won"] = b[:, 1].astype(bool)
     out["b_trunc"] = b[:, 2].astype(bool)
     out["b_decisions"] = b[:, 3].astype(np.int16)
+    out["b_hint_type"] = b[:, 4].astype(np.int8)
+    out["b_hint_style"] = b[:, 5].astype(np.int8)
     return out
 
 
@@ -254,7 +269,8 @@ def _worker(wid, cfg, server, out_dir, t_end, q):
         from .model import FactoryNet
         ck = torch.load(cfg["ckpt"], map_location="cpu", weights_only=False)
         a = ck["args"]
-        net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "embeddings")).eval()
+        net = FactoryNet(a["d_emb"], a["d"], a["layers"], a["heads"], share=a.get("share", "embeddings"),
+                         opt_feat=a.get("opt_feat", 0)).eval()
         net.load_state_dict(ck["net"])
         ev = local_battler_evaluator(net, (ck.get("value_norm") or {}).get("battler"))
     gen = Generator(ev, cfg["seed"] * 1_000_003 + 7919 * wid, cfg["battles"], cfg["concurrency"],

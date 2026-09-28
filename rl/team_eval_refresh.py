@@ -16,6 +16,11 @@ battler, and the v2 battler changes. Once the v2 battler plays as well as v1 (Re
     4. saves runs/<name>/team_eval_<iter>.pt atomically; the workers and the evaluation reload it.
 Metrics (w_refresh/*): data sizes and time, per-battle BCE / Brier / AUC on the fresh held-out teams before (old W),
 after fine-tuning and after blending, and mean |dW| on a fixed probe set of teams (probe_teams).
+
+With a hint-conditioned W (W_v3, docs §20) the same code applies: the generated battles record their opponent's
+hint (rl/team_eval_data), the real ones the hint the game gave (RealBattleLog), the fine-tune uses the per-battle loss
+of rl.team_eval.battle_loss with the same hint dropout as the original training (p_unknown, default 0.3) and the
+metrics use each battle's hint. A v1 W (no hint) is refreshed exactly as before.
 """
 
 import math
@@ -128,6 +133,9 @@ def merge_arrays(parts):
     out["b_team"] = np.concatenate(bt).astype(np.int32)
     for k in ("b_won", "b_trunc", "b_decisions"):
         out[k] = np.concatenate([p[k] for p in parts])
+    if any("b_hint_type" in p for p in parts):
+        for k in ("b_hint_type", "b_hint_style"):
+            out[k] = np.concatenate([p[k] if k in p else np.full(len(p["b_won"]), -1, np.int8) for p in parts])
     return out
 
 
@@ -150,12 +158,23 @@ class RealBattleLog:
     def start(self, backend, ctx):
         from pybattle.emu.decode import SYMBOLS as S, decode_party
         from pybattle.view import OwnMon
+        from . import determinize as DET
         from . import team_eval as T
         from .search import own_set_ids
         g = backend.game
         mons = [OwnMon.from_party(m) for m in decode_party(g.read(S.addr("gPlayerParty"), 300))[:3]]
         r, k = int(ctx["challenge"]) + 1, int(ctx["battle"]) + 1
         btype = 0 if k < 7 else (2 if T.battle_types(r)[6] == T.NOLAND else 1)
+        # the hint the attendant gave about this opponent (a training label: the game computes it from the
+        # opponent's sets exactly like this; Noland gets none)
+        if btype == 2:
+            self.hint = DET.NO_HINT
+        else:
+            try:
+                foe = decode_party(g.read(S.addr("gEnemyParty"), 300))[:3]
+                self.hint = DET.hint_of_team([(int(m.species), list(m.moves)) for m in foe])
+            except Exception:
+                self.hint = (-1, -1)
         try:
             sets = [int(x) for x in own_set_ids(g)]
         except Exception:                                     # (set ids are not used by training)
@@ -169,7 +188,8 @@ class RealBattleLog:
     def end(self, won, trunc=False, decisions=0):
         if self.cur is None:
             return
-        self.battles.append((len(self.teams), bool(won), bool(trunc), int(decisions)))
+        ht, hs = getattr(self, "hint", (-1, -1))
+        self.battles.append((len(self.teams), bool(won), bool(trunc), int(decisions), int(ht), int(hs)))
         self.teams.append(self.cur)
         self.cur = None
 
@@ -185,16 +205,12 @@ class RealBattleLog:
 # ---- fine-tuning ----------------------------------------------------------------------------------------------------
 
 def _per_battle(ev, d, idx, rng):
-    """Predicted W and outcome of every non-truncated battle of teams idx."""
-    from .team_eval import hide_swapped
-    ids, num = hide_swapped(d, idx, rng)
-    W = np.concatenate([ev.w_features(ids[i:i + 8192], num[i:i + 8192], d["round"][idx][i:i + 8192])
-                        for i in range(0, len(idx), 8192)]) if len(idx) else np.zeros((0, 3))
-    pos = np.full(len(d["round"]), -1)
-    pos[idx] = np.arange(len(idx))
-    sel = (pos[d["b_team"]] >= 0) & ~d["b_trunc"]
-    bt = d["b_team"][sel]
-    return W[pos[bt], d["btype"][bt]], d["b_won"][sel].astype(np.float64)
+    """Predicted W (each battle's hint, for a hint model) and outcome of every non-truncated battle of teams idx."""
+    from .team_eval import predict_battles
+    if not len(idx):
+        return np.zeros(0), np.zeros(0)
+    p, b = predict_battles(ev, d, np.asarray(idx, np.int64), rng, hint=True)
+    return p, d["b_won"][b].astype(np.float64)
 
 
 def metrics(ev, d, idx, seed=123):
@@ -207,16 +223,17 @@ def metrics(ev, d, idx, seed=123):
             "auc": auc(y, p), "n": int(len(y))}
 
 
-def finetune(ev, d, idx, epochs=2, lr=2e-4, batch=1024, weight_decay=1e-4, device="cpu", seed=0):
-    """A fine-tuned copy of ev.net on teams idx (binomial log-likelihood of won / played, as rl.team_eval.train;
-    swapped-in Pokemon hidden with prob 0.5). -> TeamEvaluator on the CPU."""
+def finetune(ev, d, idx, epochs=2, lr=2e-4, batch=1024, weight_decay=1e-4, device="cpu", seed=0, p_unknown=0.3):
+    """A fine-tuned copy of ev.net on teams idx (per-battle log-likelihood, rl.team_eval.battle_loss, as
+    rl.team_eval.train: swapped-in Pokemon hidden with prob 0.5; a hint model with hint dropout p_unknown).
+    -> TeamEvaluator on the CPU."""
     import copy
-    from .team_eval import TeamEvaluator, hide_swapped, round_index, team_targets
+    from .team_eval import TeamEvaluator, battle_loss, team_targets
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     dev = torch.device(device)
     net = copy.deepcopy(ev.net).to(dev).train()
-    played, won = team_targets(d)
+    played, _ = team_targets(d)
     idx = idx[played[idx] > 0]
     opt = torch.optim.AdamW(net.parameters(), lr=lr, weight_decay=weight_decay)
     steps = max(1, epochs * math.ceil(len(idx) / batch))
@@ -226,13 +243,9 @@ def finetune(ev, d, idx, epochs=2, lr=2e-4, batch=1024, weight_decay=1e-4, devic
         order = rng.permutation(idx)
         for i in range(0, len(order), batch):
             b = np.sort(order[i:i + batch])
-            ids, num = hide_swapped(d, b, rng)
-            x = [torch.from_numpy(v).to(dev) for v in (ids, num, round_index(d["round"][b]))]
-            typ = torch.from_numpy(d["btype"][b].astype(np.int64)).to(dev)
-            pl = torch.from_numpy(played[b].astype(np.float32)).to(dev)
-            wn = torch.from_numpy(won[b].astype(np.float32)).to(dev)
-            logit = net(*x).gather(1, typ[:, None])[:, 0]
-            loss = (pl * F.softplus(logit) - wn * logit).sum() / pl.sum()
+            loss, _ = battle_loss(net, d, b, rng, dev, p_unknown if getattr(net, "hint", False) else 0.0)
+            if loss is None:
+                continue
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), 1.0)
@@ -279,7 +292,7 @@ def probe_w(ev, probe):
 
 
 def refresh(ev, data, *, epochs=2, lr=2e-4, alpha=0.5, heldout=0.05, batch=1024, device="cpu", seed=0,
-            probe=None):
+            probe=None, p_unknown=0.3):
     """Fine-tune + blend on `data` (to_arrays dict). -> (new TeamEvaluator on the CPU, metrics dict)."""
     t0 = time.time()
     rng = np.random.default_rng(seed)
@@ -289,7 +302,7 @@ def refresh(ev, data, *, epochs=2, lr=2e-4, alpha=0.5, heldout=0.05, batch=1024,
     held, tr = np.sort(perm[:n_held]), perm[n_held:]
     m = {"teams": n, "battles": int((~data["b_trunc"]).sum()), "train_teams": len(tr), "heldout_teams": n_held}
     before = metrics(ev, data, held)
-    ft = finetune(ev, data, tr, epochs, lr, batch, device=device, seed=seed)
+    ft = finetune(ev, data, tr, epochs, lr, batch, device=device, seed=seed, p_unknown=p_unknown)
     after_ft = metrics(ft, data, held)
     new = blend_params(ev, ft, alpha)
     after = metrics(new, data, held)

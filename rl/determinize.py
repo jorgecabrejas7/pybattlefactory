@@ -126,6 +126,145 @@ def plausible_items(species: int):
     return _GENERAL_ITEMS + tuple(_SPECIFIC_ITEMS.get(species, ()))
 
 
+# ---- the attendant's hint about the next opponent (battle_factory.c) ------------------------------------------------
+# Before a normal battle the attendant names the opponent's most common type and its battle style (RentalView /
+# SwapView / BattleView .hint_type / .hint_style). The game computes both from the opponent's 3 sets
+# (GetOpponentMostCommonMonType, GetOpponentBattleStyle); hint_of_team replicates it, tie rules included. Before
+# Noland's battle there is no hint (NO_HINT = (18, 0), which a normal opponent can also get).
+
+N_HINT_TYPES = 19                   # type ids 0..17 (TYPE_MYSTERY 9 never occurs), 18 = no single most common type
+HINT_TYPE_NONE = 18                 # NUMBER_OF_MON_TYPES
+N_HINT_STYLES = 9                   # FACTORY_STYLE_NONE 0, the 7 styles 1..7, FACTORY_NUM_STYLES 8 = more than 2
+HINT_STYLE_MANY = 8
+NO_HINT = (HINT_TYPE_NONE, 0)
+# sMoveStyles, in FACTORY_STYLE_* order (1 PREPARATION .. 7 WEATHER); a move in two lists (Snatch) counts for the
+# first (GetMoveBattleStyle returns the first match)
+_STYLE_MOVES = (
+    ("MOVE_SWORDS_DANCE", "MOVE_GROWTH", "MOVE_MEDITATE", "MOVE_AGILITY", "MOVE_DOUBLE_TEAM", "MOVE_HARDEN",
+     "MOVE_MINIMIZE", "MOVE_WITHDRAW", "MOVE_DEFENSE_CURL", "MOVE_BARRIER", "MOVE_FOCUS_ENERGY", "MOVE_AMNESIA",
+     "MOVE_ACID_ARMOR", "MOVE_SHARPEN", "MOVE_CONVERSION", "MOVE_CONVERSION_2", "MOVE_BELLY_DRUM", "MOVE_PSYCH_UP",
+     "MOVE_CHARGE", "MOVE_SNATCH", "MOVE_TAIL_GLOW", "MOVE_COSMIC_POWER", "MOVE_IRON_DEFENSE", "MOVE_HOWL",
+     "MOVE_BULK_UP", "MOVE_CALM_MIND", "MOVE_DRAGON_DANCE"),
+    ("MOVE_SING", "MOVE_SUPERSONIC", "MOVE_DISABLE", "MOVE_LEECH_SEED", "MOVE_POISON_POWDER", "MOVE_STUN_SPORE",
+     "MOVE_SLEEP_POWDER", "MOVE_THUNDER_WAVE", "MOVE_TOXIC", "MOVE_HYPNOSIS", "MOVE_CONFUSE_RAY", "MOVE_GLARE",
+     "MOVE_POISON_GAS", "MOVE_LOVELY_KISS", "MOVE_SPORE", "MOVE_SPIDER_WEB", "MOVE_SWEET_KISS", "MOVE_SPIKES",
+     "MOVE_SWAGGER", "MOVE_MEAN_LOOK", "MOVE_ATTRACT", "MOVE_ENCORE", "MOVE_TORMENT", "MOVE_FLATTER",
+     "MOVE_WILL_O_WISP", "MOVE_TAUNT", "MOVE_YAWN", "MOVE_IMPRISON", "MOVE_SNATCH", "MOVE_TEETER_DANCE",
+     "MOVE_GRASS_WHISTLE", "MOVE_BLOCK"),
+    ("MOVE_MIST", "MOVE_RECOVER", "MOVE_LIGHT_SCREEN", "MOVE_HAZE", "MOVE_REFLECT", "MOVE_SOFT_BOILED", "MOVE_REST",
+     "MOVE_PROTECT", "MOVE_DETECT", "MOVE_ENDURE", "MOVE_MILK_DRINK", "MOVE_HEAL_BELL", "MOVE_SAFEGUARD",
+     "MOVE_BATON_PASS", "MOVE_MORNING_SUN", "MOVE_SYNTHESIS", "MOVE_MOONLIGHT", "MOVE_SWALLOW", "MOVE_WISH",
+     "MOVE_INGRAIN", "MOVE_MAGIC_COAT", "MOVE_RECYCLE", "MOVE_REFRESH", "MOVE_MUD_SPORT", "MOVE_SLACK_OFF",
+     "MOVE_AROMATHERAPY", "MOVE_WATER_SPORT"),
+    ("MOVE_GUILLOTINE", "MOVE_HORN_DRILL", "MOVE_DOUBLE_EDGE", "MOVE_HYPER_BEAM", "MOVE_COUNTER", "MOVE_FISSURE",
+     "MOVE_BIDE", "MOVE_SELF_DESTRUCT", "MOVE_SKY_ATTACK", "MOVE_EXPLOSION", "MOVE_FLAIL", "MOVE_REVERSAL",
+     "MOVE_DESTINY_BOND", "MOVE_PERISH_SONG", "MOVE_PAIN_SPLIT", "MOVE_MIRROR_COAT", "MOVE_MEMENTO", "MOVE_GRUDGE",
+     "MOVE_FACADE", "MOVE_FOCUS_PUNCH", "MOVE_BLAST_BURN", "MOVE_HYDRO_CANNON", "MOVE_OVERHEAT",
+     "MOVE_FRENZY_PLANT", "MOVE_PSYCHO_BOOST", "MOVE_VOLT_TACKLE"),
+    ("MOVE_SAND_ATTACK", "MOVE_TAIL_WHIP", "MOVE_LEER", "MOVE_GROWL", "MOVE_STRING_SHOT", "MOVE_SCREECH",
+     "MOVE_SMOKESCREEN", "MOVE_KINESIS", "MOVE_FLASH", "MOVE_COTTON_SPORE", "MOVE_SPITE", "MOVE_SCARY_FACE",
+     "MOVE_CHARM", "MOVE_KNOCK_OFF", "MOVE_SWEET_SCENT", "MOVE_FEATHER_DANCE", "MOVE_FAKE_TEARS",
+     "MOVE_METAL_SOUND", "MOVE_TICKLE"),
+    ("MOVE_MIMIC", "MOVE_METRONOME", "MOVE_MIRROR_MOVE", "MOVE_TRANSFORM", "MOVE_SUBSTITUTE", "MOVE_SKETCH",
+     "MOVE_CURSE", "MOVE_PRESENT", "MOVE_FOLLOW_ME", "MOVE_TRICK", "MOVE_ROLE_PLAY", "MOVE_ASSIST", "MOVE_SKILL_SWAP",
+     "MOVE_CAMOUFLAGE"),
+    ("MOVE_SANDSTORM", "MOVE_RAIN_DANCE", "MOVE_SUNNY_DAY", "MOVE_HAIL", "MOVE_WEATHER_BALL"),
+)
+STYLE_REQUIRED = (3, 3, 3, 2, 2, 2, 2)                    # sRequiredMoveCounts, styles 1..7
+MOVE_STYLE = np.zeros(len(_DATA["moves"]) + 1, np.int8)   # GetMoveBattleStyle: move id -> style 0..7
+for _s in range(len(_STYLE_MOVES) - 1, -1, -1):           # (reverse: the first list wins for Snatch)
+    for _nm in _STYLE_MOVES[_s]:
+        MOVE_STYLE[_MOVE_ID[_nm]] = _s + 1
+SPECIES_TYPES = np.array([list(s["types"])[:2] + list(s["types"])[:1] * (2 - len(s["types"]))
+                          for s in SPECIES], np.int64)
+
+
+def _hint_from_counts(tc, sp):
+    """Vectorized hint from type counts [n, 18] and style points [n, 8] -> (type [n], style [n])."""
+    tc = np.asarray(tc)
+    n = tc.shape[0]
+    mc0, mc1 = np.zeros(n, np.int64), np.zeros(n, np.int64)
+    ar = np.arange(n)
+    for i in range(1, 18):
+        c0, ci = tc[ar, mc0], tc[:, i]
+        up = c0 < ci
+        eq = ~up & (c0 == ci)
+        mc0 = np.where(up, i, mc0)
+        mc1 = np.where(eq, i, mc1)
+    c0, c1 = tc[ar, mc0], tc[ar, mc1]
+    t = np.where(c0 == 0, HINT_TYPE_NONE,
+                 np.where((c0 > c1) | (mc0 == mc1), mc0, HINT_TYPE_NONE))
+    sp = np.asarray(sp)
+    ok = sp[:, 1:] >= np.array(STYLE_REQUIRED)[None]
+    count = ok.sum(1)
+    last = np.where(ok.any(1), 7 - np.argmax(ok[:, ::-1], 1), 0)
+    style = np.where(count > 2, HINT_STYLE_MANY, last)
+    return t.astype(np.int64), style.astype(np.int64)
+
+
+def hint_counts(species, moves):
+    """species [n, 3], moves [n, 3, 4] -> (type counts [n, 18], style points [n, 8]) as the game counts them."""
+    species = np.asarray(species, np.int64)
+    moves = np.asarray(moves, np.int64)
+    n = species.shape[0]
+    tc = np.zeros((n, 18), np.int64)
+    ty = SPECIES_TYPES[species]                                    # [n, 3, 2]
+    for j in range(species.shape[1]):
+        np.add.at(tc, (np.arange(n), ty[:, j, 0]), 1)
+        second = ty[:, j, 1] != ty[:, j, 0]
+        np.add.at(tc, (np.arange(n)[second], ty[second, j, 1]), 1)
+    st = MOVE_STYLE[np.clip(moves, 0, len(MOVE_STYLE) - 1)].reshape(n, -1)
+    sp = np.zeros((n, 8), np.int64)
+    for s in range(8):
+        sp[:, s] = (st == s).sum(1)
+    return tc, sp
+
+
+def hint_of_arrays(species, moves):
+    """Vectorized hint_of_team: species [n, 3], moves [n, 3, 4] -> (hint_type [n], hint_style [n])."""
+    return _hint_from_counts(*hint_counts(species, moves))
+
+
+def _as_species_moves(team):
+    out_sp, out_mv = [], []
+    for m in team:
+        if isinstance(m, (int, np.integer)):                       # a Battle Frontier set id
+            fm = FRONTIER_MONS[int(m)]
+            out_sp.append(int(fm["species"]))
+            out_mv.append([int(x) for x in fm["moves"]])
+        elif isinstance(m, dict):
+            out_sp.append(int(m["species"]))
+            out_mv.append(list(m["moves"]))
+        elif len(m) == 2:                                          # (species, moves)
+            out_sp.append(int(m[0]))
+            out_mv.append(list(m[1]))
+        else:                                                      # a Gen3Game.determinize spec
+            out_sp.append(int(m[1]))
+            out_mv.append(list(m[2]))
+    out_mv = [(list(mv) + [0] * 4)[:4] for mv in out_mv]
+    return out_sp, out_mv
+
+
+def hint_of_team(team):
+    """(hint_type, hint_style) the attendant gives for an opponent team, exactly as the game computes it
+    (battle_factory.c): team = 3 Battle Frontier set ids, or 3 (species, moves), or 3 determinize specs.
+        type: count each species' types (a dual type counts both, a single type once); the most common one if it is
+              strictly more common than the runner-up the game tracks, else 18 (none). The game's scan keeps
+              mostCommonTypes[1] = the last type whose count equalled the leader's count at the time it was
+              seen, so a type that later overtakes the leader can still "tie" with an earlier, smaller one: this
+              function reproduces the scan literally.
+        style: per style (FACTORY_STYLE_*), the moves of the 12 in its list (the first list a move is in);
+              styles reaching their threshold (3 for preparation / slow & steady / endurance, 2 for the rest):
+              none -> 0, one or two -> the last of them in style order, more than two -> 8 (no single style)."""
+    sp, mv = _as_species_moves(team)
+    t, s = hint_of_arrays(np.array([sp]), np.array([mv]))
+    return int(t[0]), int(s[0])
+
+
+def hint_matches(team, hint):
+    return hint is None or hint_of_team(team) == tuple(int(x) for x in hint)
+
+
 # ---- the Battle Factory's own rules (reference for tests and analysis; the legal sampler never uses them) -----------
 
 FRONTIER_MONS = _DATA["frontier_mons"]
@@ -286,20 +425,55 @@ def check_prior(prior):
                                   "(evaluation and inference use the strict sampler)")
 
 
-def determinization(view, knowledge=None, rng=None, open_level=True, prior="strict"):
+def determinization(view, knowledge=None, rng=None, open_level=True, prior="strict", hint=None):
     """Gen3Game.determinize specs drawn with the sampler `prior`: "strict" (sample_determinization) or
-    "factory_sets" (sample_factory_sets; training only, needs the opponent's OpponentKnowledge)."""
+    "factory_sets" (sample_factory_sets; training only, needs the opponent's OpponentKnowledge). hint: the
+    attendant's (hint_type, hint_style) about this opponent (None: not used, e.g. Noland's battle): only teams the
+    game would describe with that hint are drawn (hint_of_team; rejection, see the samplers)."""
     if prior == "strict":
-        return sample_determinization(view, None, rng, open_level=open_level)
+        return sample_determinization(view, None, rng, open_level=open_level, hint=hint)
     check_prior(prior)
-    return sample_factory_sets(view, knowledge, rng, open_level=open_level)
+    return sample_factory_sets(view, knowledge, rng, open_level=open_level, hint=hint)
 
 
-def sample_determinization(view, ctx=None, rng=None, open_level=True):
+def battle_hint(view, noland: bool):
+    """The hint a player heard about the opponent of the battle in `view` (BattleView / SwapView / RentalView
+    .hint_type / .hint_style), or None before Noland's battle (the attendant says nothing; NO_HINT is also a
+    possible hint for a normal opponent, so it cannot mean "unknown" by itself)."""
+    if noland:
+        return None
+    return int(view.hint_type), int(view.hint_style)
+
+
+# rejection sampling on the hint: a whole team is drawn, its hint computed as the game does, and it is kept only if
+# it equals the heard one; after HINT_TRIES failed draws the last draw is used (counted in hint_stats["fallback"]).
+# Exact: the accepted teams follow the sampler's own distribution conditioned on the hint.
+HINT_TRIES_STRICT = 4096
+HINT_TRIES_FACTORY = 4096
+hint_stats = {"calls": 0, "draws": 0, "fallback": 0}
+
+
+def _batches(max_tries):
+    """Batch sizes of the vectorized rejection draws: 64, 256, then 1024 at a time, max_tries in total."""
+    left, size = max(1, int(max_tries)), 64
+    while left > 0:
+        yield min(size, left)
+        left -= size
+        size = min(size * 4, 1024)
+
+
+def sample_determinization(view, ctx=None, rng=None, open_level=True, hint=None,
+                            max_tries=HINT_TRIES_STRICT):
     """Specs for Gen3Game.determinize drawn from player knowledge (see the module docstring):
     [(party_slot, species | KEEP, [4 moves], item, [6 IVs], [6 EVs], nature, ability_bit, hp_fraction)].
-    `ctx` is accepted for compatibility and not used (nothing of the streak context is needed)."""
+    `ctx` is accepted for compatibility and not used (nothing of the streak context is needed).
+    hint: the heard (hint_type, hint_style) of this opponent, or None. With a hint, the species and moves of all 3
+    slots (the fainted seen ones too: their unrevealed moves count for the style) are redrawn until the team's hint
+    (hint_of_team) is the heard one (at most max_tries draws, then the last one: hint_stats["fallback"]); items,
+    IVs, EVs, natures, abilities and HP are drawn afterwards (they do not enter the hint)."""
     rng = rng or random.Random()
+    if hint is not None:
+        return _strict_with_hint(view, rng, open_level, tuple(int(x) for x in hint), max_tries)
     level = team_level(view)
     enemy = view.enemy_party[:3]
     used_species = {m.species for m in enemy if m.seen}
@@ -320,6 +494,128 @@ def sample_determinization(view, ctx=None, rng=None, open_level=True):
         n_more = min(4 - len(revealed), len(rest))
         moves = revealed + (rng.sample(rest, n_more) if n_more > 0 else [])
         moves += [0] * (4 - len(moves))
+        if m.seen and m.revealed_item:
+            item = m.revealed_item
+        else:
+            items = [x for x in plausible_items(species) if x not in used_items]
+            item = items[rng.randrange(len(items))] if items else 0
+            if item:
+                used_items.add(item)
+        ivs = [rng.randrange(32) for _ in range(6)]
+        evs = _evs(rng)
+        nature = rng.randrange(NUM_NATURES)
+        bit = _ability_bit(species, m if m.seen else None, rng)
+        hp = _hp_fraction(max_hp_of(species, ivs[0], evs[0], level), m.hp_pixels, rng) if m.seen else 1.0
+        specs.append((i, species, moves, item, ivs, evs, nature, bit, hp))
+    return specs
+
+
+def _strict_species_moves(enemy, level, open_level, rng):
+    """Species and 4 moves of every slot by the strict rules (seen: its species and revealed moves)."""
+    used_species = {m.species for m in enemy if m.seen}
+    sp, mv = [], []
+    for m in enemy:
+        if m.seen:
+            species = m.species
+        else:
+            choices = [s for s in _FRONTIER_SPECIES[bool(open_level)] if s not in used_species]
+            species = choices[rng.randrange(len(choices))]
+            used_species.add(species)
+        revealed = [x for x in (m.revealed_moves if m.seen else []) if x][:4]
+        rest = [x for x in learnable(species, level) if x not in revealed]
+        n_more = min(4 - len(revealed), len(rest))
+        moves = revealed + (rng.sample(rest, n_more) if n_more > 0 else [])
+        sp.append(species)
+        mv.append(moves + [0] * (4 - len(moves)))
+    return sp, mv
+
+
+_LEARN_PAD = {}
+
+
+def _learn_table(level):
+    """Learnable moves of every species as a padded matrix [n_species, max_len] and the lengths (cached)."""
+    t = _LEARN_PAD.get(level)
+    if t is None:
+        lists = [learnable(sp, level) if sp else () for sp in range(len(SPECIES))]
+        width = max(len(x) for x in lists)
+        mat = np.zeros((len(lists), width), np.int64)
+        for sp, x in enumerate(lists):
+            mat[sp, :len(x)] = x
+        t = _LEARN_PAD[level] = (mat, np.array([len(x) for x in lists], np.int64))
+    return t
+
+
+def _strict_draw_batch(enemy, level, open_level, g, M):
+    """M independent draws of _strict_species_moves (vectorized): species uniform over the Frontier species not
+    used by another slot (seen slots: their species), then the revealed moves plus a uniform subset of the other
+    learnable ones. -> species [M, 3], moves [M, 3, 4]."""
+    front = np.array(_FRONTIER_SPECIES[bool(open_level)], np.int64)
+    seen_sp = [m.species for m in enemy if m.seen]
+    avail = front[~np.isin(front, np.array(seen_sp, np.int64))]
+    mat, lens = _learn_table(level)
+    sp = np.zeros((M, 3), np.int64)
+    mv = np.zeros((M, 3, 4), np.int64)
+    drawn_unseen = []
+    for i, m in enumerate(enemy):
+        if m.seen:
+            sp[:, i] = m.species
+            continue
+        x = avail[g.integers(len(avail), size=M)]
+        for _ in range(64):
+            bad = np.zeros(M, bool)
+            for j in drawn_unseen:
+                bad |= x == sp[:, j]
+            if not bad.any():
+                break
+            x = np.where(bad, avail[g.integers(len(avail), size=M)], x)
+        sp[:, i] = x
+        drawn_unseen.append(i)
+    for i, m in enumerate(enemy):
+        revealed = [x for x in (m.revealed_moves if m.seen else []) if x][:4]
+        cand = mat[sp[:, i]]                                        # [M, width]
+        valid = np.arange(mat.shape[1])[None] < lens[sp[:, i]][:, None]
+        if revealed:
+            valid &= ~np.isin(cand, np.array(revealed, np.int64))
+        keys = np.where(valid, g.random(cand.shape), np.inf)
+        n_more = 4 - len(revealed)
+        pick = np.argsort(keys, 1)[:, :n_more]
+        chosen = np.take_along_axis(cand, pick, 1)
+        ok = np.take_along_axis(valid, pick, 1)
+        mv[:, i, :len(revealed)] = revealed
+        mv[:, i, len(revealed):] = np.where(ok, chosen, 0)
+    return sp, mv
+
+
+def _strict_with_hint(view, rng, open_level, hint, max_tries):
+    level = team_level(view)
+    enemy = view.enemy_party[:3]
+    hint_stats["calls"] += 1
+    if len(enemy) < 3:
+        sp, mv = _strict_species_moves(enemy, level, open_level, rng)
+    else:
+        g = np.random.default_rng(rng.getrandbits(64))
+        found = False
+        for M in _batches(max_tries):
+            S_, V_ = _strict_draw_batch(enemy, level, open_level, g, M)
+            ht, hs = hint_of_arrays(S_, V_)
+            ok = np.nonzero((ht == hint[0]) & (hs == hint[1]))[0]
+            j = int(ok[0]) if len(ok) else M - 1
+            hint_stats["draws"] += (j + 1) if len(ok) else M
+            sp = [int(x) for x in S_[j]]
+            mv = [[int(y) for y in row] for row in V_[j]]
+            if len(ok):
+                found = True
+                break
+        if not found:
+            hint_stats["fallback"] += 1
+    used_items = {m.revealed_item for m in enemy if m.seen and m.revealed_item}
+    specs = []
+    for i, m in enumerate(enemy):
+        if m.seen and m.fainted:
+            specs.append((i, KEEP, [0, 0, 0, 0], 0, [0] * 6, [0] * 6, 0, 0, -1.0))
+            continue
+        species, moves = sp[i], mv[i]
         if m.seen and m.revealed_item:
             item = m.revealed_item
         else:
@@ -377,13 +673,22 @@ def _strict_moves_item(m, level, used_items, rng):
     return moves, (items[rng.randrange(len(items))] if items else 0)
 
 
-def sample_factory_sets(view, knowledge, rng=None, open_level=True):
+def sample_factory_sets(view, knowledge, rng=None, open_level=True, hint=None,
+                        max_tries=HINT_TRIES_FACTORY):
     """Specs for Gen3Game.determinize (sample_determinization's layout) with the opponent's Pokemon drawn from the
     Factory's set list (training-time search only; see the module docstring). knowledge: the opponent's
-    pybattle.backend.OpponentKnowledge (the round, Noland, the exclusions of its generation)."""
+    pybattle.backend.OpponentKnowledge (the round, Noland, the exclusions of its generation).
+    hint: the heard (hint_type, hint_style) of this opponent, or None (ignored for Noland: no hint is given). With
+    a hint, whole teams of set ids (the fainted seen Pokemon too: their sets count for the hint) are drawn the way
+    the game draws them and kept only if hint_of_team equals the heard hint (_draw_ids_with_hint: vectorized
+    batches, at most max_tries teams, then the last draw is used and counted in hint_stats["fallback"])."""
     if knowledge is None:
         raise ValueError("factory_sets needs the opponent's OpponentKnowledge (SimBackend.opponent_knowledge)")
     rng = rng or random.Random()
+    if hint is not None and not knowledge.noland:
+        drawn = _draw_ids_with_hint(view, knowledge, rng, open_level, tuple(int(x) for x in hint), max_tries)
+        if drawn is not None:
+            return _factory_specs(view, knowledge, drawn, rng, team_level(view))
     level = team_level(view)
     enemy = view.enemy_party[:3]
     ids = factory_pool(knowledge, open_level)
@@ -423,6 +728,12 @@ def sample_factory_sets(view, knowledge, rng=None, open_level=True):
         if item:
             used_items.add(item)
         drawn[i] = (species, list(SET_MOVES_AS_BUILT[k]), item, k)
+    return _factory_specs(view, knowledge, drawn, rng, level)
+
+
+def _factory_specs(view, knowledge, drawn, rng, level):
+    """Specs of the drawn sets (drawn[slot] = (species, moves, item, set id | None) or None: fainted, kept)."""
+    enemy = view.enemy_party[:3]
     # the drawn sets are built as the game builds them: the set's EVs and nature, the game's IV for this battle
     iv = fixed_iv(knowledge.challenge + 2, False) if knowledge.noland else fixed_iv(0, knowledge.battle == 6)
     specs = []
@@ -440,3 +751,131 @@ def sample_factory_sets(view, knowledge, rng=None, open_level=True):
         hp = _hp_fraction(max_hp_of(species, ivs[0], evs[0], level), m.hp_pixels, rng) if m.seen else 1.0
         specs.append((i, species, moves, item, ivs, evs, nature, bit, hp))
     return specs
+
+
+FRONTIER_MOVES_RAW = np.array([(list(m["moves"]) + [0] * 4)[:4] for m in FRONTIER_MONS], np.int64)
+
+
+def _draw_ids_with_hint(view, knowledge, rng, open_level, hint, max_tries):
+    """Set ids for the 3 slots drawn as sample_factory_sets draws them, in vectorized batches, until a team's hint
+    is `hint`. Per slot (seen ones first) a candidate array (seen: sets of its species containing its revealed moves
+    and item; unseen: the pool); a slot's draw is uniform over its candidates that do not repeat a species or held
+    item of the slots drawn before (redrawn until it does not: the same distribution as the sequential draw).
+    -> drawn dict for _factory_specs (fainted seen slots None), or None when a seen Pokemon has no consistent set
+    (the caller then uses the sequential sampler with its strict fallback)."""
+    enemy = view.enemy_party[:3]
+    if len(enemy) < 3:
+        return None
+    ids = factory_pool(knowledge, open_level)
+    seen_species = np.array(sorted({m.species for m in enemy if m.seen}), np.int64)
+    ri = np.array(sorted({m.revealed_item for m in enemy if m.seen and m.revealed_item}), np.int64)
+    order = sorted(range(3), key=lambda j: not enemy[j].seen)
+    cands = []
+    for i in order:
+        m = enemy[i]
+        if m.seen:
+            revealed = frozenset(x for x in m.revealed_moves if x)
+            same = ids[SET_SPECIES[ids] == m.species]
+            if m.revealed_item:
+                same = same[SET_ITEM[same] == m.revealed_item]
+            else:
+                same = same[(SET_ITEM[same] == 0) | ~np.isin(SET_ITEM[same], ri)]
+            c = np.array([int(k) for k in same if revealed <= _SET_MOVESET[k]], np.int64)
+            if len(c) == 0:
+                return None
+        else:
+            c = ids[~np.isin(SET_SPECIES[ids], seen_species)]
+            c = c[(SET_ITEM[c] == 0) | ~np.isin(SET_ITEM[c], ri)]
+        cands.append(c)
+    g = np.random.default_rng(rng.getrandbits(64))
+    hint_stats["calls"] += 1
+    last = None
+    found = False
+    for M in _batches(max_tries):
+        out, valid = _vector_draw(cands, M, g)
+        teams = out[valid]
+        if len(teams) == 0:
+            continue
+        slot_ids = np.zeros_like(teams)
+        for s, i in enumerate(order):
+            slot_ids[:, i] = teams[:, s]
+        ht, hs = hint_of_arrays(SET_SPECIES[slot_ids], FRONTIER_MOVES_RAW[slot_ids])
+        ok = np.nonzero((ht == hint[0]) & (hs == hint[1]))[0]
+        last = slot_ids[ok[0]] if len(ok) else slot_ids[-1]
+        hint_stats["draws"] += int(np.nonzero(valid)[0][ok[0]]) + 1 if len(ok) else M
+        if len(ok):
+            found = True
+            break
+    if not found:
+        hint_stats["fallback"] += 1
+    if last is None:
+        return None
+    drawn = {}
+    for i, m in enumerate(enemy):
+        if m.seen and m.fainted:
+            drawn[i] = None
+            continue
+        k = int(last[i])
+        drawn[i] = (int(SET_SPECIES[k]), list(SET_MOVES_AS_BUILT[k]), int(SET_ITEM[k]), k)
+    return drawn
+
+
+def _vector_draw(cands, M, g):
+    """M teams drawn slot by slot: slot s uniform over cands[s] minus the species and held items (non-zero) of
+    slots 0..s-1 of the same team (redrawn until it clashes with none: the game's sequential rejection).
+    -> (set ids [M, len(cands)], valid [M]: False for a team whose slot could not be completed in 64 redraws)."""
+    out = np.zeros((M, len(cands)), np.int64)
+    valid = np.ones(M, bool)
+    for s, c in enumerate(cands):
+        x = c[g.integers(len(c), size=M)]
+        for _ in range(64):
+            bad = np.zeros(M, bool)
+            for q in range(s):
+                prev = out[:, q]
+                bad |= SET_SPECIES[x] == SET_SPECIES[prev]
+                bad |= (SET_ITEM[x] != 0) & (SET_ITEM[x] == SET_ITEM[prev])
+            bad &= valid
+            if not bad.any():
+                break
+            x = np.where(bad, c[g.integers(len(c), size=M)], x)
+        else:
+            valid &= ~bad                         # (a slot whose only candidates clash: that team is dropped)
+        out[:, s] = x
+    return out, valid
+
+
+def sample_pool_teams(ids, n, g, excluded_species=(), hint=None, max_tries=HINT_TRIES_FACTORY):
+    """n opponent teams (set ids [n, 3]) drawn from the set ids `ids` as the game draws a team (uniform set ids, no
+    repeated species or held item), none of `excluded_species`, each (independently) with the attendant's hint
+    `hint` if given (rejection; a team still unmatched after max_tries draws is the last draw: counted in
+    hint_stats["fallback"]). g: numpy Generator. Used by the tactician's planner (rl.team_eval.plan_values)."""
+    ids = np.asarray(ids, np.int64)
+    if len(excluded_species):
+        ids = ids[~np.isin(SET_SPECIES[ids], np.array(sorted(set(int(x) for x in excluded_species)), np.int64))]
+    cands = [ids, ids, ids]
+    if hint is None:
+        out = np.zeros((0, 3), np.int64)
+        while len(out) < n:
+            t, v = _vector_draw(cands, max(n - len(out), 1), g)
+            out = np.concatenate([out, t[v]])
+        return out[:n]
+    hint = (int(hint[0]), int(hint[1]))
+    got, last = [], None
+    tried = 0
+    hint_stats["calls"] += 1
+    M = max(64, 4 * n)
+    while len(got) < n and tried < max_tries * n:
+        t, v = _vector_draw(cands, M, g)
+        t = t[v]
+        tried += M
+        hint_stats["draws"] += M
+        if not len(t):
+            continue
+        last = t
+        ht, hs = hint_of_arrays(SET_SPECIES[t], FRONTIER_MOVES_RAW[t])
+        got.extend(t[(ht == hint[0]) & (hs == hint[1])][:n - len(got)])
+        M = min(M * 4, 8192)
+    if len(got) < n:
+        hint_stats["fallback"] += n - len(got)
+        got.extend(last[:n - len(got)])
+    return np.array(got, np.int64).reshape(n, 3)

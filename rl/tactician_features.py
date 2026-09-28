@@ -140,3 +140,44 @@ class TeamFeatures:
         out = dict(obs)
         out["opt_feat"] = self.compute(backend, kind, obs, ctx)["opt_feat"]
         return out
+
+
+# ---- alphazero_v3 (docs/RL_DECISIONS.md §20): the planner's features --------------------------------------------------
+
+class TeamFeaturesV3(TeamFeatures):
+    """TeamFeatures with rl.team_eval's v3 interface: per option the N_OPT_FEATURES columns of option_features_v3
+    ([E_round, W(normal|hint), W(last or Noland), Delta, Q_plan, Q_plan - mean, Phi]), the potential phi_v3 and the
+    expert's values q_eval_v3 (Q_plan). The hint is the one the attendant gave about the next battle (the view's
+    hint_type / hint_style; none before Noland's battle). planner_cfg: rl.team_eval.PlannerConfig fields (dict).
+    The v_next table is used as rl.team_eval.v_next_value reads it (table[challenge + 2]).
+
+        tf = TeamFeaturesV3("runs/team_eval_v3/model.pt", planner_cfg={"depth": 1}, v_next=table)
+        out = tf.compute(backend, kind, obs, ctx)   # opt_feat [6, 15, F] / [10, F], phi, q_eval, feats, options
+    """
+
+    def __init__(self, path=None, module=None, device="cpu", v_next=None, shaping=True, planner_cfg=None):
+        super().__init__(path, module, device, v_next, shaping)
+        self.planner_cfg = dict(planner_cfg or {})
+
+    @property
+    def n_feat(self):
+        from .team_eval import N_OPT_FEATURES
+        return N_OPT_FEATURES
+
+    def compute(self, backend, kind, obs, ctx):
+        from .tactician_search import options_of
+        from . import team_eval as T
+        options = options_of(kind, obs)
+        nf = T.N_OPT_FEATURES
+        if not self.enabled:
+            shape = ((6, 15) if kind == "rental" else (10,)) + (nf,)
+            return {"options": options, "opt_feat": np.zeros(shape, np.float32), "phi": 0.0,
+                    "q_eval": np.zeros(len(options)), "feats": np.zeros((len(options), nf), np.float32)}
+        ev = self._load()
+        view = backend.view()
+        hint = None if backend.run_info().noland else (int(view.hint_type), int(view.hint_style))
+        cfg = dict(self.planner_cfg)
+        feats = T.option_features_v3(ev, view, kind, ctx, options, self.v_next, hint, cfg)
+        phi = float(T.phi_v3(ev, view, kind, ctx, self.v_next, hint, cfg)) if self.shaping else 0.0
+        return {"options": options, "opt_feat": to_action_space(kind, options, feats, width=nf), "phi": phi,
+                "q_eval": T.q_eval_v3(feats), "feats": feats}
