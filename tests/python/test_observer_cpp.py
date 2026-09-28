@@ -32,7 +32,7 @@ ACTION, SWITCH = search.ACTION, search.SWITCH
 def _use_version(v):
     old = encode.VERSION
     encode.set_version(v)
-    assert N.encode_version() == v                  # rl.encode.set_version switches the C++ encoder too
+    assert N.encode_version() == encode.native_version(v)   # rl.encode.set_version switches the C++ encoder (v5 -> 4)
     yield v
     encode.set_version(old)
 
@@ -42,7 +42,7 @@ def _v3():
     yield from _use_version(3)
 
 
-@pytest.fixture(params=[3, 4], ids=["v3", "v4"])
+@pytest.fixture(params=[3, 4, 5], ids=["v3", "v4", "v5"])
 def version(request):
     yield from _use_version(request.param)
 
@@ -267,4 +267,7 @@ def test_encode_version_switch():
     with pytest.raises(ValueError):
         N.set_encode_version(2)
     with pytest.raises(ValueError):
-        encode.set_version(5)
+        encode.set_version(6)
+    encode.set_version(5)                          # v5 (alphazero_v3): v4's sizes, the C++ battle encoder as v4
+    assert (encode.MON_NUM, encode.MOVE_NUM, encode.CTX_NUM) == sizes[4] and N.encode_version() == 4
+    encode.set_version(3)

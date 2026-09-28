@@ -291,7 +291,7 @@ class SearchBattler:
             raise RuntimeError("observer='cpp' needs pybattle_native.ObsMemory (rebuild the extension)")
         self.impl, self.observer = impl, observer if impl == "cpp" else "python"
         self._mode = mode
-        if observer == "cpp" and impl == "cpp" and policy is not None and getattr(policy, "encode_version", 3) not in (3, 4):
+        if observer == "cpp" and impl == "cpp" and policy is not None and getattr(policy, "encode_version", 3) not in encode.CPP_VERSIONS:
             raise ValueError("the C++ observer encodes versions 3 and 4 only: use observer='python' for this checkpoint")
         self._evaluator = evaluator
         self.policy = policy
