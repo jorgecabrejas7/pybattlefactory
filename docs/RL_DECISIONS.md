@@ -1163,3 +1163,27 @@ python -m rl.alphazero_v2 --name alphazero_v2 --team-eval runs/team_eval_v1/mode
 - **Corrección**: el PPO del táctico se hace **antes** del entrenamiento del combatiente (sus log-probabilidades
   guardadas son exactamente las de la red actual) y con 2 épocas en vez de 4 (`--t-ppo-epochs 2`). Se relanza
   alphazero_v2 desde cero.
+
+## 19.8 Resultado final de alphazero_v2 (2026-09-28)
+Cortado en la iteración 192/200 por un apagado de la máquina (tasa de aprendizaje ya ≈ 0; checkpoint de la it. 192).
+Evaluación final, 512 rachas por ronda, mismas semillas que §18b:
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | P(6 rondas) |
+|---|---|---|---|---|---|---|---|
+| AZ v2, red sola | 77,7 | 70,5 | 46,5 | 62,7 | 27,7 | 25,0 | 1,11 % |
+| AZ v2 + búsqueda legal 512 | 80,1 | 75,2 | 47,1 | 68,6 | 29,9 | 26,6 | 1,55 % |
+
+La red sola es 2,4× PPO v3 / AZ v1; la búsqueda ya solo añade ~0,4 puntos (a v1 le añadía ~1,3): la red absorbió buena
+parte de lo que sabía la búsqueda. Seguía mejorando cuando la tasa de aprendizaje se agotó.
+
+## 20. alphazero_v3 (decidido 2026-09-28, desde cero)
+1. **Calendario "constante y caída final"** (warmup-stable-decay): tasa constante la mayor parte del entrenamiento y
+   caída solo en el último ~15 %; ~600 iteraciones. Permite alargar sin haber gastado la tasa.
+2. **Planificador del táctico con W** (expectimax): el valor de un equipo en el combate k es p_k·(1 + media, sobre
+   rivales sorteados del pool de la ronda coherentes con la pista, del máximo sobre las opciones de cambio del valor
+   del equipo resultante en k+1); profundidad 1–2 y E_ronda después. Así una elección tiene en cuenta los cambios
+   futuros ("planear hacia delante"). Entrada por opción del táctico y, si pasa la prueba en el juego real, experto
+   a imitar.
+3. **Pistas del juego** (tipo más común del próximo rival, 19 valores; estilo, 8 valores) como dos one-hot separados
+   en la entrada del táctico; W condicionada a la pista; rivales sorteados coherentes con la pista.
+4. Pruebas: capacidad del combatiente con objetivos de Gumbel; revalidar W_final de v2 en el juego real.
