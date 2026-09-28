@@ -19,7 +19,9 @@ pi0(l) pi0(p | l) exp(f(l, p)), by adding f(l, p) to the pair logits of row l an
 to lead l's logit (so rental(), sampling the lead then the pair, and rental_joint() give the same joint). The
 masked mean and max of the legal options' features also enter the tactician critic (a zero-initialized linear map
 added to its input). Without "opt_feat" in the batch, or with opt_feat=0, the network is the v1 one; a v1
-state_dict loads into a net built with opt_feat (the new parameters keep their initialization).
+state_dict loads into a net built with opt_feat (the new parameters keep their initialization). alphazero_v3 builds
+the net with opt_feat = the evaluator's N_OPT_FEATURES (§20); a state_dict whose per-option layers have another width
+(alphazero_v2's 4) loads with those layers left at their initialization.
 """
 
 import torch
@@ -110,6 +112,11 @@ class FactoryNet(nn.Module):
     def load_state_dict(self, state_dict, strict=True, **kw):
         """A state_dict without the per-option feature parameters (v1) loads into a net that has them."""
         own = self.state_dict()
+        # per-option layers of another width (alphazero_v2's 4 features into a v3 net): keep the initialization
+        other = [k for k, v in state_dict.items()
+                 if k.startswith(self.FEAT_PREFIX) and k in own and own[k].shape != v.shape]
+        if other:
+            state_dict = {k: v for k, v in state_dict.items() if k not in other}
         missing = [k for k in own if k not in state_dict]
         if strict and missing and all(k.startswith(self.FEAT_PREFIX) for k in missing):
             strict = False

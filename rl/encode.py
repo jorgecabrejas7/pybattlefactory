@@ -7,7 +7,11 @@ Every decision becomes 6 Pokemon tokens + 1 context token:
 
 Embedding ids reserve a NONE and an UNKNOWN index per table: an unrevealed enemy item is UNKNOWN, a Pokemon
 holding nothing is NONE. Numbers use fixed game-bound scales. IVs, EVs and nature are not given (already in the
-stats); nor are the attendant's hints to the tactician. The battler's view includes them (it's in BattleView).
+stats). The attendant's hints (most common type of the next opponent, 19 values with 18 = none; its style, 8
+values) are in the battler's context (BattleView). Up to v4 the tactician does not get them (its field block is all
+zeros); from v5 (alphazero_v3, docs §20) the rental and the swap context carry the same two one-hots, in the same
+place as the battler's (the last N_HINT_TYPES + N_STYLES numbers of the field block), from RentalView / SwapView
+hint_type / hint_style (the next opponent). v5 changes nothing else: the battle layout is v4's.
 From v4 the swap's defeated-team tokens also carry how hard each of those Pokemon was (SwapView.defeated).
 """
 
@@ -53,15 +57,18 @@ N_ROUNDS = 7                                # rounds 1-6, and 7+
 # Encoding versions (docs/RL_DECISIONS.md): 2 = ppo_joint_v1/v2; 3 = + damage/speed estimates, round one-hot;
 # 4 (§17) = estimates without the opponent's IVs (any IV 0-31 at its level), Thick Club / Light Ball on the right
 # species, + N_DEFEATED numbers per Pokemon token: how hard each defeated opponent was (swap only; zeros elsewhere).
+# 5 (§20, alphazero_v3) = v4 + the attendant's hints in the tactician's context (rental and swap); same sizes.
 VERSION = None
 MON_NUM = MOVE_NUM = CONTEXT_NUM = CTX_NUM = None
-VERSIONS = (2, 3, 4)
+VERSIONS = (2, 3, 4, 5)
+CPP_VERSIONS = (3, 4, 5)        # the C++ observer / encoder (battle observations; v5's battle layout is v4's)
+HINT_NUM = N_HINT_TYPES + N_STYLES
 N_DEFEATED = 6          # FoeRecord: damage, knockouts, turns, hits taken, max boosts, inflicted status
 
 
 def set_version(v):
     """Select the observation layout. Call before building networks or forking environment workers. The C++
-    encoder (pybattle_native, versions 3-4) follows the same switch."""
+    encoder (pybattle_native, versions 3-4; it encodes battles only, so v5 runs it as v4) follows the same switch."""
     global VERSION, MON_NUM, MOVE_NUM, CONTEXT_NUM, CTX_NUM
     if v not in VERSIONS:
         raise ValueError(f"encoding version must be one of {VERSIONS}, not {v!r}")
@@ -80,7 +87,12 @@ def _native_set_version(v):
     except ImportError:
         return
     if v >= 3 and hasattr(native, "set_encode_version"):
-        native.set_encode_version(v)
+        native.set_encode_version(native_version(v))
+
+
+def native_version(v):
+    """The C++ encoder's version for Python version v (v5 differs from v4 only in tactician observations)."""
+    return min(v, 4)
 
 
 set_version(3)
@@ -280,6 +292,15 @@ def battle(view, ctx):
                  mask=mask, active=np.int64(a_own))
 
 
+def _tactician_field(view):
+    """The tactician's field block: zeros, and from v5 the hint one-hots at the end (the battler's positions)."""
+    f = np.zeros(FIELD_NUM, np.float32)
+    if VERSION >= 5:
+        f[FIELD_NUM - HINT_NUM:] = np.concatenate([_onehot(view.hint_type, N_HINT_TYPES),
+                                                   _onehot(view.hint_style, N_STYLES)])
+    return f
+
+
 def rental(view, ctx):
     mons = [_own_mon(m) for m in view.candidates]
     sp = [m.species for m in view.candidates]
@@ -288,7 +309,7 @@ def rental(view, ctx):
         for p, (j, k) in enumerate(PAIRS):
             pair_mask[lead, p] = lead not in (j, k) and len({sp[lead], sp[j], sp[k]}) == 3
     lead_mask = pair_mask.any(1)
-    return _pack(mons, [0, 0], np.concatenate([np.zeros(FIELD_NUM, np.float32), _context(ctx)]),
+    return _pack(mons, [0, 0], np.concatenate([_tactician_field(view), _context(ctx)]),
                  lead_mask=lead_mask, pair_mask=pair_mask)
 
 
@@ -306,7 +327,7 @@ def swap(view, ctx, valid=None):
             if ok and valid is not None:
                 ok = valid(i, j)
             mask[1 + 3 * i + j] = ok
-    return _pack(mons, [0, 0], np.concatenate([np.zeros(FIELD_NUM, np.float32), _context(ctx)]), mask=mask)
+    return _pack(mons, [0, 0], np.concatenate([_tactician_field(view), _context(ctx)]), mask=mask)
 
 
 def collate(obs_list, device):

@@ -2,6 +2,7 @@
 
     python -m rl.az_bench --workers 18 --decisions 200 [--sims 128 --t-budget 256] [--ckpt runs/X/latest.pt]
     python -m rl.az_bench --v2 --workers 18 --decisions 200 [--sims 256]      # rl.alphazero_v2's self-play
+    python -m rl.az_bench --v3 --workers 18 --decisions 200 --team-eval stub:varied   # rl.alphazero_v3's
 
 Uses a freshly initialized network unless --ckpt is given (an alphazero or PPO checkpoint of the same layout).
 """
@@ -27,10 +28,20 @@ def main():
     p.add_argument("--ckpt", default=None)
     p.add_argument("--inference", default="gpu", choices=("gpu", "cpu"))
     p.add_argument("--v2", action="store_true", help="alphazero_v2's self-play (Gumbel battler, no tactician search)")
+    p.add_argument("--v3", action="store_true", help="alphazero_v3's self-play (v2 + hints, v3 features)")
     args, rest = p.parse_known_args()
     from .search import mark_training
     mark_training()
-    if args.v2:
+    if args.v3:
+        import importlib
+        from . import alphazero_v3 as V3
+        from .tactician_features import load_evaluator
+        a = V3.parse(rest)
+        a.team_eval_module = V3.resolve_module(a.team_eval_module, a.team_eval)
+        mod = importlib.import_module(a.team_eval_module)
+        n = V3.n_opt_features(mod, load_evaluator(mod, a.team_eval, "cpu") if a.team_eval else None)
+        cfg, player, extra = V3.worker_cfg(a, n), V3.SelfPlayerV3, {"opt_feat": n, "version": 3}
+    elif args.v2:
         from . import alphazero_v2 as V2
         a = V2.parse(rest)
         cfg, player, extra = V2.worker_cfg(a), V2.SelfPlayerV2, {"opt_feat": V2.N_FEAT, "version": 2}
@@ -69,7 +80,7 @@ def main():
                                                     "t_net_calls", "b_leaves", "b_searched", "battles")}
     n = tot["b_decisions"]
     print(f"workers {args.workers}  sims {a.sims}  dets {a.dets}  t_budget {getattr(a, 't_budget', None)}"
-          + (f"  v2: Gumbel root, non-root {a.non_root}" if args.v2 else ""))
+          + (f"  v{3 if args.v3 else 2}: Gumbel root, non-root {a.non_root}" if args.v2 or args.v3 else ""))
     print(f"battler decisions/s: {n / dt:.1f}  ({n} in {dt:.1f} s)")
     print(f"battler search: {tot['b_ms'] / max(n, 1):.1f} ms/decision, {tot['b_leaves'] / max(tot['b_searched'], 1):.0f} "
           f"leaves/searched decision")

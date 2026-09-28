@@ -153,8 +153,8 @@ class BattleSimulator:
         self.evaluator = evaluator
         self.max_decisions = max_decisions
         if cpp_obs is None:
-            cpp_obs = NativeObsMemory is not None and encode.VERSION in (3, 4)
-        if cpp_obs and (NativeObsMemory is None or encode.VERSION not in (3, 4)):
+            cpp_obs = NativeObsMemory is not None and encode.VERSION in encode.CPP_VERSIONS
+        if cpp_obs and (NativeObsMemory is None or encode.VERSION not in encode.CPP_VERSIONS):
             raise ValueError("the C++ observer needs the extension's ObsMemory and encoding version 3 or 4")
         self.cpp = cpp_obs
         self.steps = self.net_calls = self.errors = 0

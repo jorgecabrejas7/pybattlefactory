@@ -1187,3 +1187,103 @@ parte de lo que sabía la búsqueda. Seguía mejorando cuando la tasa de aprendi
 3. **Pistas del juego** (tipo más común del próximo rival, 19 valores; estilo, 8 valores) como dos one-hot separados
    en la entrada del táctico; W condicionada a la pista; rivales sorteados coherentes con la pista.
 4. Pruebas: capacidad del combatiente con objetivos de Gumbel; revalidar W_final de v2 en el juego real.
+
+### 20.1 Implementación del entrenador (`rl/alphazero_v3.py`, 2026-09-28)
+
+Punto de entrada **nuevo**, `python -m rl.alphazero_v3`, construido sobre `rl/alphazero_v2.py` (que a su vez usa
+`rl/alphazero.py`). Los cambios en archivos compartidos no alteran v1 ni v2: se comprobó que v2 da, con la misma
+semilla, exactamente las mismas muestras de autojuego, las mismas métricas del PPO del táctico y los mismos pesos
+tras la actualización que el código anterior (bit a bit). Todo lo que no se nombra aquí es igual que en v2
+(§19.5–19.7): combatiente Gumbel con 256 simulaciones, PPO del táctico **antes** que el entrenamiento del
+combatiente, shaping con Φ, tabla V_siguiente, refresco de W cada 20 iteraciones desde que se arma, evaluación de la
+red sola cada iteración y con búsqueda de 512 simulaciones cada 5.
+
+**1. Tasa de aprendizaje "calentamiento, constante y caída" (WSD, *warmup-stable-decay*).** Definiciones:
+- **Tasa de aprendizaje** (lr): cuánto se mueven los pesos en cada paso del optimizador.
+- **Calentamiento** (*warmup*): las primeras `--lr-warmup` = 3 iteraciones la tasa sube en línea recta:
+  lr·(it + 1)/4, es decir, 25 %, 50 % y 75 % de `--lr` (3·10⁻⁴). Evita pasos grandes con la red recién iniciada.
+- **Tramo constante**: después, `--lr` fija.
+- **Caída**: en el último `--decay-frac` = 15 % de `--iterations` (600 por defecto: iteraciones 510–599) la tasa
+  baja hasta `--lr` × `--lr-min-frac` (5 %), con forma de coseno (`--lr-decay cosine`, por defecto) o recta
+  (`linear`). En la última iteración se llega exactamente al mínimo; más allá de `--iterations`, el mínimo.
+
+**Alargar el entrenamiento.** El plan solo depende de `--iterations` mientras la caída no ha empezado: al reanudar
+(`--init-from`) con más iteraciones antes de la caída, la caída se desplaza al nuevo final (p. ej. de 600 a 800: la
+caída pasa a 680–799). Si la caída ya empezó (el checkpoint ya entrenó su primera iteración de caída), se mantiene
+el plan del checkpoint y se avisa por pantalla: para alargar una ejecución terminada, se reanuda desde un
+`ckpt_<pasos>.pt` anterior a su caída (se guardan todos). Si se reanuda con un plan más corto cuya caída ya debería
+haber empezado, la caída empieza en la iteración reanudada. El plan se guarda en el checkpoint (`lr_schedule`).
+El combatiente y el táctico comparten el optimizador (AdamW, como en v2) y por tanto el calendario: no se vio motivo
+para separarlos (el táctico ya controla su paso con el recorte de PPO y las épocas adaptativas de abajo).
+
+**2. Pistas en la entrada del táctico: codificación versión 5** (`--encode-version 5`, obligatoria en v3).
+- **One-hot**: un vector de ceros con un 1 en la casilla del valor.
+- La pista del encargado sobre el **próximo** rival: tipo más común (19 casillas, la 19.ª = "sin pista", valor 18) y
+  estilo (8 casillas), de `RentalView` / `SwapView` (`hint_type`, `hint_style`). Antes de Noland no hay pista: el
+  tipo va a la casilla "sin pista" y el estilo a la 0 (así lo da el juego).
+- Van en el token de contexto del táctico (alquiler y cambio), **en las mismas posiciones que en el combatiente** (las
+  últimas 27 cifras del bloque de campo, que en el táctico eran ceros hasta la v4). Los tamaños no cambian y nada más
+  cambia: la observación del combate de la v5 es idéntica a la de la v4 (test).
+- **C++**: el codificador C++ solo codifica combates, así que con la v5 funciona como v4 (`encode.native_version`);
+  el observador C++ de la búsqueda se sigue usando (`encode.CPP_VERSIONS` = 3, 4, 5).
+- **Checkpoints anteriores**: los de v2 (codificación 4) siguen cargando y jugando sin pistas (test con
+  `runs/alphazero_v2/latest.pt`); su red también puede iniciar una red v3 (las capas por opción de otra anchura se
+  quedan con su inicialización).
+
+**3. Rasgos por opción del evaluador v3.** La interfaz la implementa el otro lado (evaluador, planificador, W
+condicionada a la pista); aquí se usa así:
+- `option_features_v3(ev, vista, tipo, ctx, opciones, tabla_v_next, pista, planner_cfg)` → [n_opciones,
+  N_OPT_FEATURES], al menos [E_ronda, W(normal | pista), W(último o Noland), Δ, Q_plan, Q_plan − media]. La anchura
+  de la entrada por opción de la red (`opt_feat`) es **N_OPT_FEATURES**, leída del evaluador cargado (su checkpoint)
+  o, si no la tiene, del módulo; no está fijada en el código. El MLP pequeño por opción, la inclinación de la política
+  conjunta del alquiler y la entrada al crítico (media y máximo) son los de v2 con esa anchura.
+- **Φ** (shaping) = `phi_v3(...)` con la pista. **Q_eval** = `q_eval_v3(rasgos)` (la Q_plan del planificador), y
+  **π_eval** = softmax(Q_eval / T), T = `--t-eval-temp` (0,5 victorias), detrás de `--t-imitation` (0 por defecto:
+  se fijará con la validación en el juego real del otro lado).
+- `tabla_v_next` es la tabla completa por ronda (la misma media móvil de v2); `planner_cfg` es `--planner-cfg`
+  (JSON, `{}` = los valores por defecto del módulo).
+- **Módulo**: `--team-eval-module`; por defecto, el primero de `rl.team_eval_v3` / `rl.team_eval` que tenga la
+  interfaz. Con `--team-eval stub` o `stub:varied`, `rl/az3_stub.py` (6 rasgos; sin planificador: Q_plan = Φ del
+  estado tras la opción, y la pista solo mueve un poco W, para las pruebas).
+- El refresco de W (§19.6) reutiliza el de v2; si el módulo trae sus propias `generate_battles` / `probe_teams` (por
+  ejemplo, para generar combates con pistas), se usan esas.
+
+**4. Señal del táctico.** Definiciones:
+- **Época** (§7): una pasada por todas las muestras de la iteración.
+- **KL aproximada**: cuánto se ha alejado la política actual de la que jugó las muestras; media de (r − 1) − log r
+  con r = π_nuevo(a)/π_viejo(a). Ahora se mide sobre todas las muestras de la iteración, sin gradiente.
+- `--t-ppo-epochs` = 2 épocas (como v2) y después **épocas extra mientras la KL aproximada siga por debajo de
+  `--t-kl-target` = 0,01**, hasta `--t-max-epochs` = 4 en total. Así se saca más señal de las muestras cuando la
+  política apenas se ha movido, y si la KL ya pasa del objetivo tras 2 épocas no se hace ninguna extra (no se vuelve
+  a la situación de §19.7, KL 0,11–0,15). `--t-kl-target 0` = exactamente v2. Registros: `tactician/epochs`,
+  `tactician/kl_between_epochs`, `tactician/kl_final`.
+- **Peso hacia las rondas difíciles** (`--t-round-weight` α, 0 por defecto = v2): dificultad de la ronda r =
+  1 − P(completar r) de la última evaluación de la red sola (la misma que usa el currículo de rondas de salida; la
+  ronda 7 en adelante cuenta como la 6; sin evaluación, todas iguales). Cada muestra pesa
+  (1 − α) + α · dificultad / media de las dificultades de las muestras de la iteración (peso medio 1, así que la
+  tasa efectiva no cambia). Pesa los términos de política y de imitación; no el valor ni la entropía. El currículo de
+  rondas de salida (`--start-p0`) sigue igual que en v2. Se deja en 0 hasta ver cómo aprende el táctico con las
+  pistas y los rasgos nuevos.
+
+**Evaluación fuera del entrenamiento.** `rl.policy.Policy` carga los checkpoints de v3 (anchura y codificación de
+sus `args`), y `rl.eval_rounds` añade por defecto los rasgos del táctico de un checkpoint v3 (`--features auto`; la W,
+la tabla V_siguiente y `planner_cfg` del checkpoint; `--team-eval` cambia la W). Los demás checkpoints se evalúan
+como antes. `python -m rl.az_bench --v3` mide la velocidad del autojuego.
+
+**Velocidad** (`python -m rl.az_bench`, 18 procesos + servidor GPU, pesos de `runs/alphazero_v2/latest.pt`, evaluador
+de prueba `stub:varied`, 100 decisiones por proceso; máquina muy cargada por otros trabajos, carga 43–50 con 20
+núcleos, así que solo vale la comparación): v3 76,6 decisiones del combatiente/s (221 ms por decisión), v2 en las
+mismas condiciones 83,0 (203 ms); diferencia dentro del ruido de la carga (el táctico es el 1 % del tiempo de los
+procesos, 22 ms por decisión con el evaluador de prueba). Con la máquina libre v2 daba 388/s (§19.5). El coste real
+del táctico dependerá del planificador del evaluador v3; conviene repetir la medida con `runs/team_eval_v3/model.pt`.
+
+**Registros nuevos**: `tactician/hint_none_frac` (fracción de decisiones sin pista), las tres de épocas de arriba,
+`tactician/weight_min` / `weight_max` (con α > 0) y `train/lr` con el calendario nuevo.
+
+Comando:
+
+```bash
+python -m rl.alphazero_v3 --name alphazero_v3 --team-eval runs/team_eval_v3/model.pt \
+    [--team-eval-module rl.team_eval_v3] [--planner-cfg '{"depth": 1}'] [--t-imitation 0]   # resto por defecto
+python -m rl.az_bench --v3 --workers 18 --decisions 200 --team-eval runs/team_eval_v3/model.pt
+```

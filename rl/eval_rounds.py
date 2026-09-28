@@ -21,6 +21,10 @@ fixed seeds) and stop when round k is completed or lost. Per round it reports:
     battle    per-battle win rate inside round k
 Both are comparable between policies trained with different start distributions. Results are cached per
 checkpoint in <run>/eval_rounds/.
+
+Tactician features: an alphazero_v3 checkpoint's tactician takes per-option features from its team evaluator; by
+default (--features auto) they are added as in training (rl.alphazero_v3.features_hook: the checkpoint's W, v_next
+table and planner_cfg; --team-eval overrides the W). Other checkpoints are evaluated as before (no hook).
 """
 
 import argparse
@@ -228,6 +232,14 @@ def _rounds(spec):
     return [int(x) for x in spec.split(",")]
 
 
+def features_hook(ckpt, args):
+    """The obs_hook for a checkpoint (--features auto: alphazero_v3's tactician features; else None)."""
+    if getattr(args, "features", "auto") == "off":
+        return None
+    from .alphazero_v3 import features_hook as v3_hook
+    return v3_hook(ckpt, getattr(args, "team_eval", None))
+
+
 def main_inprocess(args):
     kw = {}
     if args.battler == "search":
@@ -243,11 +255,12 @@ def main_inprocess(args):
         server = InferenceServer(args.ckpt, n_clients=args.procs, deadline_ms=args.deadline_ms,
                                  precision=args.precision)
         res["inference"] = {"kind": "gpu", "deadline_ms": args.deadline_ms, "precision": args.precision}
+    hook = features_hook(args.ckpt, args)
     try:
         for k in _rounds(args.rounds):
             t0 = time.time()
             r = eval_round_inprocess(args.ckpt, k, args.runs, args.battler, kw, seed=args.seed, procs=args.procs,
-                                     device=args.device, threads=args.threads, server=server)
+                                     device=args.device, threads=args.threads, server=server, obs_hook=hook)
             r["seconds"] = time.time() - t0
             if server is not None:
                 r["inference"] = server.stats()
@@ -287,6 +300,9 @@ def main():
     p.add_argument("--out", default=None)
     p.add_argument("--steps", default=None, help="comma list of battler steps; nearest checkpoint each")
     p.add_argument("--runs", type=int, default=192)
+    p.add_argument("--features", choices=("auto", "off"), default="auto",
+                   help="auto: an alphazero_v3 checkpoint's tactician gets its per-option features")
+    p.add_argument("--team-eval", default=None, help="--features auto: this team evaluator instead of the ckpt's")
     args = p.parse_args()
     if args.ckpt:
         return main_inprocess(args)
@@ -305,7 +321,9 @@ def main():
         if os.path.exists(path):
             continue
         policy = Policy(c, device)
-        res = {"steps": steps_of[c], "rounds": {k: eval_round(policy, device, k, args.runs) for k in range(1, 7)}}
+        hook = features_hook(c, args)
+        res = {"steps": steps_of[c], "rounds": {k: eval_round(policy, device, k, args.runs, obs_hook=hook)
+                                                for k in range(1, 7)}}
         json.dump(res, open(path, "w"), indent=1)
         print(os.path.basename(c), {k: (round(v["complete"], 3), round(v["battle"], 3)) for k, v in res["rounds"].items()},
               flush=True)
