@@ -885,11 +885,11 @@ def q_eval_v3(features) -> np.ndarray:
 
 # ---- W refresh hooks (the v3 trainer calls these when the module has them) ------------------------------------------
 
-def generate_battles(evaluator, n_battles, seed, **kw):
+def generate_battles(evaluator, n_battles, seed, *args, **kw):
     """rl.team_eval_refresh.generate_battles: simulated battles with the battler `evaluator`, each recording its
     opponent's hint (b_hint_type / b_hint_style; NO_HINT for Noland)."""
     from .team_eval_refresh import generate_battles as gen
-    return gen(evaluator, n_battles, seed, **kw)
+    return gen(evaluator, n_battles, seed, *args, **kw)
 
 
 def probe_teams(n=1024, seed=12345):

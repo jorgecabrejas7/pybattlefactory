@@ -186,15 +186,20 @@ def test_legal_sampler_uses_player_knowledge_only():
     """The legal sampler reads the view only (no set list, pool, fixed IVs or true state) and its draws respect
     what the player saw and the visible rules."""
     from pybattle.view import hp_bar_pixels
-    assert list(inspect.signature(D.sample_determinization).parameters) == ["view", "ctx", "rng", "open_level"]
-    src = inspect.getsource(D.sample_determinization)
-    for banned in ("FRONTIER_MONS", "SET_", "pool(", "fixed_iv", "enemy_iv", "gEnemyParty", ".game"):
-        assert banned not in src, banned
+    assert list(inspect.signature(D.sample_determinization).parameters) == ["view", "ctx", "rng", "open_level",
+                                                                          "hint", "max_tries"]
+    # with a hint (alphazero_v3): the heard hint, recomputed from the drawn species and moves with the game's rule
+    for fn in (D.sample_determinization, D._strict_with_hint, D._strict_draw_batch, D._strict_species_moves,
+               D._learn_table, D.hint_of_team, D.hint_of_arrays, D.hint_counts, D._hint_from_counts):
+        src = inspect.getsource(fn)
+        for banned in ("FRONTIER_MONS", "SET_", "pool(", "fixed_iv", "enemy_iv", "gEnemyParty", ".game"):
+            assert banned not in src, (fn.__name__, banned)
     rng = random.Random(0)
     n = 0
     species_all = set(D.frontier_species(True))
-    for b, v, _ in _decisions(24, seed=7):
-        specs = D.sample_determinization(v, None, rng)
+    for i, (b, v, _) in enumerate(_decisions(24, seed=7)):
+        hint = D.battle_hint(v, b.run_info().noland) if i % 2 else None
+        specs = D.sample_determinization(v, None, rng, hint=hint)
         level = D.team_level(v)
         drawn_species, items = [], []
         for (slot, sp, moves, item, ivs, evs, nature, bit, hp), m in zip(specs, v.enemy_party):
