@@ -49,7 +49,11 @@ def main():
     a = torch.load(args.ckpt, map_location="cpu")["args"]
     greedy = not args.sampled
 
-    envs = [FactoryEnv(args.seed * 1000 + i, max_decisions=a["max_decisions"]) for i in range(args.envs)]
+    from .eval_rounds import features_hook       # alphazero_v3: the tactician's per-option features, as in eval
+    args.features, args.team_eval = "auto", None
+    hook = features_hook(args.ckpt, args)
+    envs = [FactoryEnv(args.seed * 1000 + i, max_decisions=a.get("max_decisions", 300), obs_hook=hook)
+            for i in range(args.envs)]
     events = [e._advance(NO_ACTION) for e in envs]
 
     rent_offered, rent_chosen, rent_lead = collections.Counter(), collections.Counter(), collections.Counter()
