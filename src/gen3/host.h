@@ -94,6 +94,11 @@ uint16_t Gen3Factory_RentalFrontierMonId(uint8_t i);
 int Gen3Factory_Rent(uint8_t a, uint8_t b, uint8_t c);
 int Gen3Factory_Swap(int playerSlot, int enemySlot);
 int Gen3Factory_RunBattle(uint32_t maxFrames);
+// Optional hook: every battle message the engine sends to a controller (CONTROLLER_PRINTSTRING), with the
+// battlers involved when it is sent. NULL (the default) costs one test per message. Used by Gen3Game's message
+// log (diagnostics: rl/autopsy.py); it never changes the battle.
+extern void (*gGen3MessageHook)(uint16_t stringId, uint8_t active, uint8_t attacker, uint8_t target,
+                                uint8_t effectBattler, uint16_t move);
 void Gen3_TraceRandom(int enable);   // log every Random() caller to stderr   // callbacks and controller state to stderr
 
 #ifdef __cplusplus

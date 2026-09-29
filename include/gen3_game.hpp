@@ -65,6 +65,15 @@ public:
     FactoryInfo factoryInfo();
     static void traceRandom(bool enable);
 
+    // Message log (diagnostics): while enabled, every battle message this game prints (CONTROLLER_PRINTSTRING)
+    // is recorded as {string id, active battler, attacker, target, effect battler, current move}. Clones start
+    // with the log disabled and empty. takeMessages() returns the log and clears it.
+    struct Message { int stringId, active, attacker, target, effect, move; };
+    void setMessageLog(bool enable);
+    bool messageLog() const { return m_logMessages; }
+    std::vector<Message> takeMessages();
+    void pushMessage(const Message& m) { m_messages.push_back(m); }
+
     // Search (src/gen3/search_host.c). These never advance the Factory phase.
     // simStep: kind 0 = move slot `index`, 1 = switch to party index `index`; then run() until the
     // next player decision or the battle's end. Returns {Decision, gBattleOutcome}.
@@ -103,6 +112,8 @@ private:
     void activate();
     std::vector<uint8_t> m_state;
     bool m_determinized = false;
+    bool m_logMessages = false;
+    std::vector<Message> m_messages;
 };
 
 }  // namespace pkmn

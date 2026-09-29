@@ -1538,3 +1538,166 @@ Comparaciones directas entre criterios (misma prueba, todos los estados): q_plan
 - **Orden**: (1) evaluación final de v3 (512 rachas/ronda, red sola y búsqueda 512); (2) **autopsia de derrotas** de
   las rondas 5–6: clasificar cada derrota en azar / equipo / error del combatiente, y buscar patrones por rival y por
   evento; (3) diseñar la v4 atacando la causa dominante.
+
+## 21. Autopsia de derrotas (`rl/autopsy.py`, 2026-09-29)
+
+Objetivo (§20.5): antes de diseñar la v4, saber **por qué** pierde alphazero_v3 los combates de las rondas 5–6. La
+herramienta toma un checkpoint de v3, junta N derrotas (500 por defecto), clasifica cada una en *azar*, *equipo* o
+*error del combatiente*, y busca patrones por rival, pista y evento. Es **solo diagnóstico**: usa información
+perfecta, que nunca entra en el entrenamiento.
+
+### 21.1 Definiciones (de abajo arriba)
+
+- **Semilla del RNG del combate**: el juego saca todo lo aleatorio (críticos, precisión, daño, efectos secundarios,
+  duración del sueño...) de un único número, `gRngValue`, que cambia en cada uso. Fijar ese número antes del primer
+  fotograma de un combate fija toda su suerte; cambiarlo da "el mismo combate con otra suerte".
+- **Receta de repetición**: el simulador es determinista, así que una derrota se guarda como la semilla del entorno
+  de la racha más **todas** las acciones que se dieron al juego desde que empezó (alquiler, cambios, cada decisión
+  del combate). Volver a aplicarlas reconstruye cada estado exactamente. Se comprueba con un *hash* del estado al
+  final del combate (equipos, Pokémon en combate, RNG, resultados, número de fotogramas; no los bytes crudos del
+  estado, que contienen punteros distintos en cada proceso).
+- **Decisión previa**: la decisión del táctico justo antes del combate perdido: el cambio (combates 2–7 de la ronda)
+  o el alquiler (combate 1). Sus **opciones** son las de §19.2 (cambio: quedarse o uno de los 3×3 cambios, hasta 10;
+  alquiler: hasta 60).
+- **Inicio del combate**: el estado tras aplicar una opción en la decisión previa, justo antes del primer fotograma
+  del combate. Para comparar opciones se **reescribe el equipo rival verdadero** (el que generó el juego con nuestra
+  opción real; con Noland depende de nuestro equipo, porque excluye nuestros sets) y se fija la semilla del RNG.
+  Prueba: con la opción real, el rival verdadero y el RNG propio del juego, las acciones registradas reproducen el
+  combate real bit a bit (mismo *hash* final).
+- **Combatiente fuerte**: la búsqueda MCTS de §15 con muchas simulaciones (`--strong-sims`, 1.024 por defecto,
+  8 determinizaciones) en **modo perfecto** (ve el estado verdadero: el equipo rival real y sus PS exactos; solo
+  el azar futuro le es desconocido). Es un techo: juega mejor que cualquier jugador con información legal.
+  `rl.autopsy` no es un punto de entrada de entrenamiento: no llama a `mark_training()`, ningún módulo de
+  entrenamiento lo importa, y se niega a arrancar dentro de un proceso marcado como entrenamiento (tests).
+- **P(ganar | estado)**: la fracción de victorias al jugar desde ese estado hasta el final con el combatiente fuerte,
+  repitiendo con varias semillas del RNG. Con M semillas, su error típico es ≤ 0,5/√M (0,09 con M = 32).
+- **Números aleatorios comunes**: comparar dos opciones con **las mismas** semillas, para que la diferencia no sea
+  ruido de la suerte (las dos empiezan con los mismos números aleatorios). Se usan en (b) y (c).
+- **Rebobinar**: volver al estado de una de nuestras decisiones del combate real (reconstruido con la receta) y
+  jugar desde allí otra cosa. Al rebobinar se sortea de nuevo la suerte del turno (`Gen3Game.redraw_turn`: semilla
+  nueva, y la elección del rival de ese turno, que su IA ya había hecho, se deshace), como en las raíces de §15.
+
+### 21.2 Qué hace
+
+**1. Recogida** (`collect.jsonl`). Rachas que empiezan al principio de la ronda k (k ∈ `--rounds`, 5 y 6 por
+defecto, alternando; 3 opcional), con el protocolo de `rl.eval_rounds` (la racha se para al completar la ronda k o
+al perder). Juegan los agentes de v3 **como se evalúan**: táctico = su red, voraz, con sus rasgos por opción (W y
+planificador, `features_hook` del checkpoint); combatiente = su red, voraz (`--battler net`), o la búsqueda legal de
+la evaluación (`--battler search`: 512 simulaciones, 8 determinizaciones). De **cada** combate (también de los
+ganados, para tener la tasa base) se guarda: nuestro equipo y el rival **verdadero** (especie, movimientos, objeto y
+sets de la Factory; solo para el análisis), la pista, si es Noland, y los **eventos**. De las derrotas, además, la
+receta de repetición y el registro de turnos (en cada decisión nuestra: turno, acción, Pokémon en combate de los dos
+lados con sus PS verdaderos, y los eventos hasta la decisión siguiente).
+
+**Eventos** (definidos por el mensaje que imprime el juego). Se añadió al núcleo C (`src/gen3/host.c`) un gancho
+que ve cada mensaje de combate (`CONTROLLER_PRINTSTRING`) con los combatientes implicados; `Gen3Game.log_messages()`
+lo registra solo para esa partida (los clones no registran: la búsqueda no se ve afectada; sin registrar, el coste es
+una comprobación por mensaje) y `take_messages()` lo devuelve. Eventos, cada uno con el lado al que le pasa (`own_`
+nosotros, `opp_` el rival): `crit` ("¡Un golpe crítico!", de quien ataca), `miss` (falla la precisión), `ohko_hit`
+("¡KO de un golpe!"), `confusion_hit` (se hiere a sí mismo por la confusión), `flinch` (retrocede), `freeze` /
+`paralysis` / `sleep` / `confused` (le causan el estado), `frozen_turn` / `full_para` / `asleep_turn` / `love_turn`
+(pierde el turno por congelación, parálisis total, sueño o enamoramiento), `wake` (despierta), `focus_band` (aguanta
+con Cinta Focus), `explosion` (usa Explosión / Autodestrucción), `ohko_move` (usa Fisura, Perforador, Guillotina o
+Frío Polar), `perish_song` (Canto Mortal) y `crit_ko` (un crítico tras el que cae el objetivo de ese mismo golpe:
+"decidido por un crítico"). **Balance de suerte** de un combate = eventos que nos perjudican (crítico del rival,
+fallo nuestro, parálisis total nuestra...) menos los que nos benefician (los simétricos).
+
+**2. Análisis de cada derrota** (`analysis.jsonl`; en paralelo; reanudable):
+- **(a) Azar**: **P0** = P(ganar) desde el inicio del combate con la opción real y el rival verdadero, con el
+  combatiente fuerte y `--luck-seeds` = 32 semillas. Si P0 es alta, el combate era ganable y se perdió por suerte o
+  por el combatiente; si es baja, el emparejamiento era malo. También P0 con la red sola (`p0_net`).
+- **(b) Error del combatiente**: desde nuestra **última** decisión hacia atrás, la búsqueda fuerte (en modo legal y
+  en modo perfecto) dice qué jugaría en el estado real. Donde difiere de nuestra jugada: P_d = P(ganar) jugando fuerte
+  desde ahí (`--mistake-seeds` = 8 semillas; se corta en cuanto ya no puede llegar a 0,5) y, si P_d ≥ 0,5, P_nuestra
+  = P(ganar) jugando nuestra jugada y después fuerte, con las mismas semillas. **Error decisivo** = la decisión más
+  tardía con P_d ≥ 0,5 y Δ = P_d − P_nuestra ≥ `--mistake-delta` (0,25). La definición sin la condición de Δ
+  ("difiere y la posición seguía ganable") se informa aparte (`p_found`); la condición evita llamar error a una
+  jugada distinta pero igual de buena (dos búsquedas del mismo estado coinciden solo el ~61 %, §20.2). Se revisan
+  como mucho `--max-rewinds` = 4 decisiones distintas por modo. Se informa la fracción de derrotas con error
+  decisivo, el turno típico, cuántas decisiones antes del final, y qué jugamos frente a qué habría jugado la
+  búsqueda (movimiento concreto o cambio).
+- **(c) Equipo**: las opciones de la decisión previa contra el **mismo** rival verdadero y con las mismas semillas.
+  Etapa 1 (criba): todas las opciones con la red sola (`--team-screen-seeds` = 16). Etapa 2: las `--team-top` = 2
+  mejores alternativas de la criba con el combatiente fuerte, en las primeras `--team-seeds` = 16 semillas de (a)
+  (nuestra opción: su resultado de (a) en esas mismas semillas). **Ganancia de equipo** = mejor alternativa − la
+  nuestra. Para cada opción se guardan también W (la de ese combate: normal, o último / Noland) y Q_plan del
+  planificador: ¿veían la alternativa mejor? (`planner_saw` = Q_plan la prefería a la nuestra; `w_saw`, igual con W).
+
+**Etiqueta de cada derrota**, con esta **precedencia** (la primera que se cumple):
+1. `battler_error`: hay error decisivo (modo legal por defecto, `--label-mistake-mode`). Va primero porque es lo
+   que muestra la partida real: una posición ganable se tiró.
+2. `team`: una alternativa gana ≥ `--team-gain` = 0,3 más.
+3. `luck`: P0 ≥ `--luck-p` = 0,8: el combatiente fuerte gana casi siempre ese inicio y no hubo error claro.
+4. `mixed`: 0,5 ≤ P0 < 0,8, sin error ni equipo mejor.
+5. `bad_matchup`: P0 < `--bad-p` = 0,5 y ninguna alternativa claramente mejor: el rival era malo para cualquiera de
+   nuestras opciones.
+
+Los indicadores no son exclusivos: el informe da también sus combinaciones (p. ej. `mistake+p0_high`), y
+`--report-only` vuelve a etiquetar con otros umbrales sin repetir el análisis.
+
+**3. Informe** (`runs/autopsy_<nombre>/`): `summary.json`, `losses.csv` (una fila por derrota) y `report.md`
+(corto, en español). Fracciones de cada etiqueta con **intervalo bootstrap al 95 %** (se remuestrean las derrotas
+2.000 veces con reemplazo y se toman los percentiles 2,5 y 97,5 de la fracción), en total, en Noland, sin Noland y
+por ronda. **Patrones**: para cada rasgo (especie o set del rival, estilo y tipo de la pista, evento, especie
+nuestra, ronda, combate de la ronda, Noland, balance de suerte), **lift** = P(rasgo | derrota) / P(rasgo |
+victoria) (lift 3 = el rasgo aparece 3 veces más a menudo en las derrotas), con un IC al 95 % aproximado (del
+logaritmo del cociente). Como las derrotas duran más (en una muestra de 60: 21,7 decisiones nuestras frente a 12,5
+en las victorias), parte del lift de un evento es solo más tiempo para que ocurra; por eso se da también la tasa
+por cada 10 decisiones nuestras.
+
+### 21.3 Cómo lanzarlo
+
+```bash
+python -m rl.autopsy --ckpt runs/alphazero_v3/latest.pt --name v3        # 500 derrotas, rondas 5-6, 18 procesos + GPU
+python -m rl.autopsy --ckpt ... --name v3_search --battler search        # recogida con la búsqueda legal 512
+python -m rl.autopsy --ckpt ... --name v3_r3 --rounds 3,5,6
+python -m rl.autopsy --name v3 --report-only [--team-gain 0.2 ...]       # rehace el informe (y las etiquetas)
+python -m rl.autopsy --estimate [presupuestos]                           # coste estimado, sin ejecutar nada
+```
+Si se interrumpe, al relanzar con el mismo `--name` reutiliza `collect.jsonl` y salta las derrotas ya analizadas.
+
+### 21.4 Coste
+
+Medido en 14 derrotas de las rondas 5–6 (presupuestos de semillas por defecto, pocas simulaciones, en CPU) para
+contar decisiones, y con la velocidad de la búsqueda de 2.048 simulaciones en la máquina libre (`runs/diag_az1`: ~215
+ms por decisión y proceso, con 18 procesos y el servidor GPU; proporcional a las simulaciones, §15b). Una derrota
+cuesta, en decisiones del combatiente fuerte: (a) ~640 (32 semillas × ~20 decisiones: los combates perdidos son
+largos), (b) ~24 comparaciones + ~380 de rebobinados, (c) ~640 (2 alternativas × 16 semillas × ~20); más ~5.000
+decisiones de la red (criba y P0 de la red), que son baratas. La recogida de 500 derrotas son unos minutos (la red
+gana el 83 % de los combates de las rondas 5–6: ~3.000 combates).
+
+| Presupuesto | Horas (500 derrotas, 18 procesos) |
+|---|---|
+| Plan inicial: 2.048 simulaciones, 32 semillas en (a) y en las **10** opciones de (c) | ~11 |
+| 2.048, 32 semillas, (c) con 3 alternativas × 32 semillas | ~5 |
+| 2.048, resto por defecto | ~2,9 |
+| **1.024 simulaciones, resto por defecto (propuesto, valores por defecto)** | **~1,5** |
+| 2.048, 16 semillas en (a) y (c), 2 rebobinados | ~2,1 |
+
+La estimación tiene ±30 % (la calibración es pequeña y la búsqueda fuerte de verdad juega combates de otra
+duración). `--estimate` la recalcula para cualquier combinación de presupuestos.
+
+### 21.5 Pruebas (`tests/python/test_autopsy.py`)
+- Los identificadores de mensajes coinciden con los del decomp; el análisis de mensajes asigna bien el lado de cada
+  evento y detecta `crit_ko`; el registro de mensajes funciona en una partida real y los clones no registran.
+- Extremo a extremo con 2 derrotas y presupuestos mínimos (recogida, (a), (b), (c), informe y `--report-only`).
+- Determinismo: la receta reproduce el combate en **otro proceso** (mismo *hash*); el inicio de combate con la opción
+  real, el rival verdadero y el RNG propio reproduce el combate real; la misma semilla da el mismo resultado (red,
+  búsqueda perfecta y legal, y los rebobinados); todas las opciones de (c) se enfrentan al rival verdadero.
+- Modo perfecto solo aquí: `rl.autopsy` no está entre los puntos de entrada de entrenamiento, nadie del entrenamiento
+  lo importa, y en un proceso marcado como entrenamiento se niega a arrancar y a construir la búsqueda perfecta.
+- La lógica del error decisivo (recorrido hacia atrás; las posiciones ya perdidas y las jugadas igual de buenas se
+  saltan) y la precedencia de las etiquetas.
+
+### 21.6 Pendiente de decidir
+- **Presupuesto**: 1.024 simulaciones (propuesto, ~1,5 h) o 2.048 (~2,9 h, o ~2,1 h con 16 semillas).
+- **Umbral del error decisivo**: Δ ≥ 0,25 (con 8 semillas, 2 de 8) es un añadido a la definición pedida; con
+  `--mistake-delta 0` se recupera la definición sin Δ (las dos se informan siempre). ¿Modo legal (lo que un jugador
+  podía saber; por defecto) o perfecto para la etiqueta?
+- **(c) en dos etapas**: la criba con la red decide qué alternativas juega el combatiente fuerte; una alternativa que
+  la red juega mal pero el fuerte jugaría bien puede quedarse fuera (sesgo hacia "no es el equipo").
+- **Noland**: su equipo verdadero depende del nuestro (excluye nuestros sets); al probar otra opción se le mantiene el
+  equipo real, aunque con esa opción el juego habría sorteado otro (y alguno de sus sets podría coincidir con uno
+  nuestro).
+- La recogida no es reproducible bit a bit entre ejecuciones (el planificador del táctico sortea rivales sin semilla,
+  como en la evaluación); el análisis sí lo es, porque parte de las acciones registradas.
