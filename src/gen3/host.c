@@ -357,6 +357,11 @@ static bool8 Host_CommonCommand(u8 cmd, bool8 isPlayer)
     case CONTROLLER_INTROSLIDE:
         gIntroSlideFlags |= 1;
         return TRUE;
+    case CONTROLLER_PRINTSTRING:
+        if (gGen3MessageHook)
+            gGen3MessageHook(gBattleBufferA[gActiveBattler][2] | (gBattleBufferA[gActiveBattler][3] << 8),
+                             gActiveBattler, gBattlerAttacker, gBattlerTarget, gEffectBattler, gCurrentMove);
+        return TRUE;
     default:
         return TRUE;
     }
@@ -626,6 +631,7 @@ static const char *FuncName(void *fn)
 
 // Optional Random() call tracing (debugging RNG-order divergences).
 void (*gGen3RandomHook)(void *) = NULL;
+void (*gGen3MessageHook)(uint16_t, uint8_t, uint8_t, uint8_t, uint8_t, uint16_t) = NULL;
 
 static void LogRandomCaller(void *returnAddress)
 {

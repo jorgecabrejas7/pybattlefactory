@@ -228,6 +228,24 @@ void Gen3Game::traceRandom(bool enable) {
     Gen3_TraceRandom(enable ? 1 : 0);
 }
 
+namespace {
+void onMessage(uint16_t stringId, uint8_t active, uint8_t attacker, uint8_t target, uint8_t effect, uint16_t move) {
+    if (s_live && s_live->messageLog())
+        s_live->pushMessage({stringId, active, attacker, target, effect, move});
+}
+}  // namespace
+
+void Gen3Game::setMessageLog(bool enable) {
+    m_logMessages = enable;
+    if (enable) gGen3MessageHook = &onMessage;   // stays installed: onMessage checks the live game's flag
+}
+
+std::vector<Gen3Game::Message> Gen3Game::takeMessages() {
+    std::vector<Message> out;
+    out.swap(m_messages);
+    return out;
+}
+
 std::pair<int, int> Gen3Game::simStep(int kind, int index) {
     activate();
     if (Gen3_BattleOutcome() != 0) throw std::runtime_error("battle is over");

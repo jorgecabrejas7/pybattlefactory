@@ -228,6 +228,15 @@ PYBIND11_MODULE(pybattle_native, m) {
         .def_property_readonly("rng", &Gen3Game::rng)
         .def_property_readonly("frames", &Gen3Game::frames)
         .def_static("trace_random", &Gen3Game::traceRandom)
+        .def("log_messages", &Gen3Game::setMessageLog, py::arg("enable") = true,
+             "Record every battle message this game prints (not inherited by clones): see take_messages.")
+        .def("take_messages", [](Gen3Game& g) {
+                py::list out;
+                for (const auto& m : g.takeMessages())
+                    out.append(py::make_tuple(m.stringId, m.active, m.attacker, m.target, m.effect, m.move));
+                return out;
+            }, "The messages logged since the last call, cleared: [(string_id, active_battler, attacker, target, "
+               "effect_battler, current_move)] (STRINGID_* of the decomp's constants/battle_string_ids.h).")
         .def("read", [](Gen3Game& b, uint32_t addr, size_t n) { return py::bytes(b.readRam(addr, n)); })
         .def("write", [](Gen3Game& b, uint32_t addr, py::bytes data) { b.writeRam(addr, data); })
         .def("factory_begin", &Gen3Game::factoryBegin, py::arg("open_level") = true, py::arg("win_streak") = 0,
