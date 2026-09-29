@@ -1529,3 +1529,12 @@ Comparaciones directas entre criterios (misma prueba, todos los estados): q_plan
   que la experiencia real (PPO) siga pudiendo corregir al experto.
 - Estilo de pista 8 ("más de dos estilos"): queda fuera de las 8 casillas del one-hot y se codifica como todo ceros,
   que es distinguible de "sin pista" (estilo 0): no se pierde información.
+
+### 20.5 Objetivo y orden de trabajo tras alphazero_v3 (decidido 2026-09-29)
+- **Objetivo**: completar el reto **de forma consistente** (no basta con completarlo una vez). Exige ganar ~98,4 % de
+  los combates; v3 está en ~95 % (rondas 1–2) y ~83 % (rondas 5–6).
+- **Prioridad**: mejorar el agente ahora; el enfoque de investigación (varias semillas, ablaciones, intervalos de
+  confianza) se hará después.
+- **Orden**: (1) evaluación final de v3 (512 rachas/ronda, red sola y búsqueda 512); (2) **autopsia de derrotas** de
+  las rondas 5–6: clasificar cada derrota en azar / equipo / error del combatiente, y buscar patrones por rival y por
+  evento; (3) diseñar la v4 atacando la causa dominante.
