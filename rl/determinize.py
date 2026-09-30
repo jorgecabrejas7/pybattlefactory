@@ -419,8 +419,9 @@ def check_prior(prior):
     if prior not in PRIORS:
         raise ValueError(f"opponent prior must be one of {PRIORS}, not {prior!r}")
     if prior == "factory_sets":
+        import os
         from .search import in_training
-        if not in_training():
+        if not in_training() and os.environ.get("PYBATTLE_DIAGNOSTIC_PRIOR") != "factory_sets":
             raise PermissionError("the factory_sets opponent sampler is for training-time search only "
                                   "(evaluation and inference use the strict sampler)")
 

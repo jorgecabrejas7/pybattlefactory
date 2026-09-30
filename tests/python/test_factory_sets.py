@@ -84,8 +84,16 @@ def test_factory_sets_is_training_only(monkeypatch):
     assert '"opponent_prior": "strict"' in inspect.getsource(AZ.evaluate_rounds)
     import rl.eval_rounds
     import rl.evaluate
-    for mod in (rl.eval_rounds, rl.evaluate):
-        assert "factory_sets" not in inspect.getsource(mod)
+    assert "factory_sets" not in inspect.getsource(rl.evaluate)
+    # eval_rounds: only the explicit diagnostic flag (default strict) enables it, through the env var below
+    src = inspect.getsource(rl.eval_rounds)
+    assert src.count("factory_sets") == 2 and 'default="strict"' in src
+    monkeypatch.delenv("PYBATTLE_DIAGNOSTIC_PRIOR", raising=False)
+    with pytest.raises(PermissionError):
+        D.check_prior("factory_sets")
+    monkeypatch.setenv("PYBATTLE_DIAGNOSTIC_PRIOR", "factory_sets")
+    D.check_prior("factory_sets")                          # the diagnostic ceiling (docs §22)
+    monkeypatch.delenv("PYBATTLE_DIAGNOSTIC_PRIOR")
     # once constructed in training, leaving training is refused at search time too
     monkeypatch.setenv(search.TRAINING_ENV, "1")
     sb = search.SearchBattler(None, n_sims=8, n_determinizations=2, evaluator=ev, opponent_prior="factory_sets")

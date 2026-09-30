@@ -245,6 +245,10 @@ def main_inprocess(args):
     if args.battler == "search":
         kw = {"n_sims": args.sims, "n_determinizations": args.dets, "c_puct": args.c_puct, "batch": args.batch,
               "mode": args.mode, "allow_perfect": args.mode == "perfect", "seed": args.seed}
+        if args.opponent_prior != "strict":
+            # diagnostic only (docs §22): the ceiling of a learned opponent model, like --mode perfect for information
+            os.environ["PYBATTLE_DIAGNOSTIC_PRIOR"] = args.opponent_prior
+            kw["opponent_prior"] = args.opponent_prior
         if args.impl:
             kw["impl"] = args.impl
     res = {"ckpt": args.ckpt, "battler": args.battler, "search": kw, "runs": args.runs, "seed": args.seed,
@@ -288,6 +292,8 @@ def main():
     p.add_argument("--c-puct", type=float, default=1.5)
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--mode", choices=("legal", "perfect"), default="legal")
+    p.add_argument("--opponent-prior", choices=("strict", "factory_sets"), default="strict",
+                   help="legal search's opponent sampler; factory_sets here is a DIAGNOSTIC ceiling, never an agent")
     p.add_argument("--rounds", default="1-6")
     p.add_argument("--procs", type=int, default=1)
     p.add_argument("--threads", type=int, default=1, help="torch threads per worker")
