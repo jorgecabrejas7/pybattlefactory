@@ -1891,3 +1891,17 @@ python -m rl.alphazero_v4 --name alphazero_v4 --opponent-model-init runs/opp_mod
 python -m rl.opponent_model_data collect --ckpt runs/alphazero_v3/latest.pt --battles 30000 --out runs/opp_model_v3/model.pt
 python -m rl.opponent_model_data validate --model runs/opp_model_v3/model.pt --heldout runs/opp_model_v3/heldout.pkl --per-battle 3
 ```
+
+### 22.x Techo con información perfecta de alphazero_v3 y lanzamiento de v4 (2026-09-30)
+Búsqueda **perfecta** (conoce al rival real; solo diagnóstico) con la red final de v3, semilla 777:
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | P(6 rondas) | victorias por combate R5 / R6 |
+|---|---|---|---|---|---|---|---|---|
+| perfecta 2048, 512 rachas | 89,3 | 88,1 | 71,3 | 79,9 | 67,0 | 62,9 | 18,9 % | 94,3 / 93,7 % |
+| perfecta 8192 (R5–6, 128 rachas) | – | – | – | – | 62,5 | 62,5 | – | 93,3 / 93,7 % |
+
+Con información perfecta y la red de v3, el combatiente gana ~94 % de los combates de las rondas 5–6, y pasar de 2048 a
+8192 simulaciones no mejora: la búsqueda ya está saturada con esta red. El 98,4 % por combate que exige completar el
+reto de forma consistente **no es alcanzable con la red actual ni conociendo al rival**; hace falta una red (valor y
+política) mucho mejor, que suba el techo, o equipos mejores. alphazero_v4 (modelo del rival aprendido de la experiencia,
+1500 iteraciones, desde cero) se lanzó igualmente, como decidió el usuario.
