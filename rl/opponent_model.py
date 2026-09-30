@@ -389,6 +389,78 @@ class _Compiled:
             return self.cfgs[s], np.zeros(len(w)), 1.0
         return self.cfgs[s], w / z, wn / z
 
+    # --- vectorized tables (the hint's rejection sampling) --------------------------------------------------------
+
+    def _table(self, entries):
+        """entries: [(weight, species, cfg or None, R)] -> arrays for draw_rows."""
+        K = len(entries)
+        tab = {"w": np.array([e[0] for e in entries], np.float64), "sp": np.array([e[1] for e in entries], np.int64),
+               "cfg": [e[2] for e in entries], "moves": np.zeros((K, 4), np.int64), "item": np.zeros(K, np.int64),
+               "novel": np.array([e[2] is None for e in entries], bool), "R": [e[3] for e in entries]}
+        for k, (w, s, c, R) in enumerate(entries):
+            if c is not None:
+                tab["moves"][k] = (list(c[0]) + [0] * 4)[:4]
+                tab["item"][k] = c[1]
+            else:
+                tab["item"][k] = -1                          # drawn later (a revealed one is never a clash)
+        return tab
+
+    def slot_table(self, b, s, R, I, used_items, level):
+        key = ("slot", b, s, R, I, frozenset(used_items))
+        tab = self._tab_cache.get(key) if hasattr(self, "_tab_cache") else None
+        if tab is None:
+            if not hasattr(self, "_tab_cache"):
+                self._tab_cache = {}
+            cs, pc, pn = self.config_posterior(b, s, R, I, used_items)
+            entries = [(p, s, c, R) for c, p in zip(cs, pc) if p > 0] + [(pn, s, None, R)]
+            tab = self._tab_cache[key] = self._table(entries)
+            tab["cum"] = np.cumsum(tab["w"])
+        return tab
+
+    def joint_table(self, b, used_items, level, exclude_species):
+        key = ("joint", b, frozenset(used_items))
+        if not hasattr(self, "_tab_cache"):
+            self._tab_cache = {}
+        tab = self._tab_cache.get(key)
+        if tab is None:
+            ps = self.p_species[b]
+            entries = []
+            for s, p in zip(self.frontier, ps):
+                if p <= 0:
+                    continue
+                cs, pc, pn = self.config_posterior(b, int(s), frozenset(), -1, used_items)
+                entries += [(p * q, int(s), c, frozenset()) for c, q in zip(cs, pc) if q > 0]
+                entries.append((p * pn, int(s), None, frozenset()))
+            tab = self._tab_cache[key] = self._table(entries)
+        w = tab["w"]
+        if exclude_species:
+            w = np.where(np.isin(tab["sp"], np.array(sorted(exclude_species), np.int64)), 0.0, w)
+        return dict(tab, cum=np.cumsum(w))
+
+    def draw_rows(self, tab, M, g, level):
+        """M draws from a table -> (entry index, species, moves [M, 4], item (-1: a novel slot's, drawn later))."""
+        cum = tab["cum"]
+        idx = np.minimum(np.searchsorted(cum, g.random(M) * cum[-1], side="right"), len(cum) - 1)
+        sp = tab["sp"][idx]
+        mv = tab["moves"][idx].copy()
+        it = tab["item"][idx]
+        nov = np.flatnonzero(tab["novel"][idx])
+        if len(nov):
+            mat, lens = DET._learn_table(level)
+            R = sorted(tab["R"][idx[nov[0]]])            # (the same for every novel entry of a table)
+            s = sp[nov]
+            cand = mat[s]
+            valid = np.arange(mat.shape[1])[None] < lens[s][:, None]
+            if R:
+                valid &= ~np.isin(cand, np.array(R, np.int64))
+            keys = np.where(valid, g.random(cand.shape), np.inf)
+            n_more = max(4 - len(R), 0)
+            pick = np.argsort(keys, 1)[:, :n_more]
+            chosen = np.where(np.take_along_axis(valid, pick, 1), np.take_along_axis(cand, pick, 1), 0)
+            mv[nov, :len(R)] = R[:4]
+            mv[nov, len(R):] = chosen
+        return idx, sp, mv, it
+
     def nature(self, s, c, rng):
         cnt = self.natures.get((s, c))
         if cnt is None:
@@ -521,6 +593,74 @@ class ExperienceModel:
             out[i] = (s, (list(moves) + [0] * 4)[:4], int(item), nature, known)
         return out
 
+    def _hint_team(self, t, b, enemy, level, rng, hint):
+        """_draw_team conditioned on the heard hint, vectorized: batches of whole teams (every slot from its table:
+        seen slots their configurations + novel, unseen slots the joint species x configuration table), a team
+        whose slots repeat a species or a held item is dropped (the sequential sampler's exclusions, as rejection on
+        the joint), and the first team whose hint (hint_of_arrays, species + moves) is the heard one is kept; after
+        max_hint_tries teams, the last valid one (hint_stats["fallback"]). Novel slots get strict moves in the
+        batch and their item afterwards."""
+        g = np.random.default_rng(rng.getrandbits(64))
+        rev_items = frozenset(m.revealed_item for m in enemy if m.seen and m.revealed_item)
+        seen_sp = [m.species for m in enemy if m.seen]
+        tabs = []
+        for m in enemy:
+            if m.seen:
+                R = frozenset(x for x in m.revealed_moves if x)
+                I = int(m.revealed_item) if m.revealed_item else -1
+                used = rev_items - ({I} if I >= 0 else set())
+                tabs.append(t.slot_table(b, int(m.species), R, I, used, level))
+            else:
+                tabs.append(t.joint_table(b, rev_items, level, seen_sp))
+        DET.hint_stats["calls"] += 1
+        last = None
+        found = False
+        for M in DET._batches(self.cfg["max_hint_tries"]):
+            rows = [t.draw_rows(tab, M, g, level) for tab in tabs]         # (idx, species, moves, item) each
+            sp = np.stack([r[1] for r in rows], 1)
+            it = np.stack([r[3] for r in rows], 1)
+            mv = np.stack([r[2] for r in rows], 1)
+            ok = (sp[:, 0] != sp[:, 1]) & (sp[:, 0] != sp[:, 2]) & (sp[:, 1] != sp[:, 2])
+            for a, c in ((0, 1), (0, 2), (1, 2)):
+                ok &= (it[:, a] <= 0) | (it[:, a] != it[:, c])
+            valid = np.flatnonzero(ok)
+            if not len(valid):
+                continue
+            ht, hs = DET.hint_of_arrays(sp[valid], mv[valid])
+            hit = np.flatnonzero((ht == hint[0]) & (hs == hint[1]))
+            j = int(valid[hit[0]]) if len(hit) else int(valid[-1])
+            DET.hint_stats["draws"] += int(hit[0]) + 1 if len(hit) else len(valid)
+            last = (j, rows, sp, mv, it)
+            if len(hit):
+                found = True
+                break
+        if not found:
+            DET.hint_stats["fallback"] += 1
+        if last is None:
+            return self._draw_team(t, b, enemy, level, rng)
+        j, rows, sp, mv, it = last
+        used_items = set(int(x) for x in it[j] if x > 0) | set(rev_items)
+        out = {}
+        for i, m in enumerate(enemy):
+            tab = tabs[i]
+            k = int(rows[i][0][j])
+            s = int(sp[j, i])
+            moves = [int(x) for x in mv[j, i]]
+            cfg = tab["cfg"][k]
+            if cfg is not None:
+                out[i] = (s, moves, int(cfg[1]), t.nature(s, cfg, rng), True)
+                continue
+            I = int(m.revealed_item) if m.seen and m.revealed_item else -1
+            if I >= 0:
+                item = I
+            else:
+                items = [x for x in DET.plausible_items(s) if x not in used_items]
+                item = items[rng.randrange(len(items))] if items else 0
+            if item:
+                used_items.add(item)
+            out[i] = (s, moves, int(item), rng.randrange(DET.NUM_NATURES), False)
+        return out
+
     def determinization(self, view, challenge, rng=None, open_level=True, hint=None):
         """Specs for Gen3Game.determinize: [(slot, species | KEEP, [4 moves], item, [6 IVs], [6 EVs], nature,
         ability_bit, hp_fraction)] drawn from the experience (see the module docstring). hint: the heard
@@ -530,20 +670,10 @@ class ExperienceModel:
         b = bucket_of(challenge)
         level = DET.team_level(view)
         enemy = view.enemy_party[:3]
-        team = self._draw_team(t, b, enemy, level, rng)
         if hint is not None and self.cfg["use_hint"] and len(enemy) == 3:
-            h = (int(hint[0]), int(hint[1]))
-            DET.hint_stats["calls"] += 1
-            for _ in range(int(self.cfg["max_hint_tries"]) - 1):
-                sp = np.array([[team[i][0] for i in range(3)]])
-                mv = np.array([[team[i][1] for i in range(3)]])
-                ht, hs = DET.hint_of_arrays(sp, mv)
-                DET.hint_stats["draws"] += 1
-                if (int(ht[0]), int(hs[0])) == h:
-                    break
-                team = self._draw_team(t, b, enemy, level, rng)
-            else:
-                DET.hint_stats["fallback"] += 1
+            team = self._hint_team(t, b, enemy, level, rng, (int(hint[0]), int(hint[1])))
+        else:
+            team = self._draw_team(t, b, enemy, level, rng)
         specs = []
         for i, m in enumerate(enemy):
             if m.seen and m.fainted:

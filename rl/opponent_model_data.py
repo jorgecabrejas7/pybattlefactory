@@ -65,6 +65,7 @@ def _play(job):
         events.append(env._advance(NO_ACTION))
         ended.append(0)
     samples = []
+    first_truth = {}
     battles = 0
     e = 0
     while battles < n_battles:
@@ -75,9 +76,13 @@ def _play(job):
                 be = env.backend
                 v = be.view()
                 info = be.run_info()
-                samples.append({"battle": (seeds[e], ended[e]), "challenge": info.challenge_num,
+                bid = (seeds[e], ended[e])
+                if bid not in first_truth:          # the items as they were before the battle (a berry eaten /
+                    first_truth.clear()             # an item knocked off is 0 in the party afterwards)
+                    first_truth[bid] = _true_configs(be)
+                samples.append({"battle": bid, "challenge": info.challenge_num,
                                 "noland": info.noland, "hint": (int(v.hint_type), int(v.hint_style)),
-                                "enemy": v.enemy_party[:3], "truth": _true_configs(be), "turn": v.turn})
+                                "enemy": v.enemy_party[:3], "truth": first_truth[bid], "turn": v.turn})
             a = policy.act(kind, encode.collate([ev["obs"]], policy.device), greedy=True)[0]
             ev = env.step(decode_action(kind, a))
             if ev["stats"].get("battle") is not None:
@@ -182,6 +187,8 @@ def score(model, samples, per_battle=None, seed=0, ks=(1, 5, 10), with_factory=T
             if m.seen and m.fainted:
                 continue
             sp, moves, item = s["truth"][i]
+            if item == 0 and m.revealed_item:       # (consumed / knocked off before the truth was read)
+                item = int(m.revealed_item)
             g = "seen" if m.seen else "unseen"
             lm = model.slot_logp(v, i, s["challenge"], sp, moves, item) if model is not None else -math.inf
             ls = OM.strict_slot_logp(v, i, sp, moves, item)
