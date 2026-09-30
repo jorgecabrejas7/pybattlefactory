@@ -237,7 +237,8 @@ def features_hook(ckpt, team_eval=None, device="cpu"):
 
 # ---- arguments ----------------------------------------------------------------------------------------------------
 
-def parse(argv=None):
+def build_parser():
+    """v3's argument parser (rl.alphazero_v4 extends it)."""
     p = V2.build_parser()
     p.description = __doc__.split("\n")[0]
     p.set_defaults(name=time.strftime("alphazero_v3_%Y%m%d_%H%M%S"), iterations=600, encode_version=ENCODE_VERSION)
@@ -262,10 +263,17 @@ def parse(argv=None):
     p.add_argument("--t-max-epochs", type=int, default=4, help="tactician PPO epochs at most (with --t-kl-target)")
     p.add_argument("--t-round-weight", type=float, default=0.0,
                    help="alpha: weight of the tactician's samples toward hard rounds (0: uniform, as v2)")
-    a = p.parse_args(argv)
+    return p
+
+
+def finish_args(a):
     a.value_mix_t, a.min_batch_t = 0.0, 1
     a.planner_cfg = json.loads(a.planner_cfg) if isinstance(a.planner_cfg, str) else dict(a.planner_cfg or {})
     return a
+
+
+def parse(argv=None):
+    return finish_args(build_parser().parse_args(argv))
 
 
 # ---- self-play ----------------------------------------------------------------------------------------------------
@@ -337,10 +345,12 @@ def refresh_enabled(module, team_eval):
 
 # ---- main -----------------------------------------------------------------------------------------------------------
 
-def main(argv=None):
+def main(argv=None, ext=None):
+    """ext: an extension (rl.alphazero_v4.OpponentModelExt) with hooks parse, config_extra, load, worker_cfg,
+    player, before_play, after_play, ckpt_extra, eval_search_kw; None = exactly alphazero_v3."""
     from .search import mark_training
     mark_training()     # no perfect-information search can exist in a training process (rl/search.py)
-    args = parse(argv)
+    args = ext.parse(argv) if ext is not None else parse(argv)
     if args.encode_version < 5:
         raise ValueError("alphazero_v3 needs --encode-version 5 (the tactician's hints)")
     torch.manual_seed(args.seed)
@@ -361,6 +371,8 @@ def main(argv=None):
 
     config = dict(vars(args), algo=AZ.ALGO, version=VERSION, opt_feat=n_feat, share="embeddings", gamma_b=1.0,
                   beta=0.0)
+    if ext is not None:
+        config.update(ext.config_extra(args))
     json.dump(config, open(os.path.join(run_dir, "config.json"), "w"), indent=2)
     from torch.utils.tensorboard import SummaryWriter
     tb = SummaryWriter(run_dir)
@@ -401,6 +413,8 @@ def main(argv=None):
         else:
             print(f"initialized the network from {args.init_from} (version {ck.get('args', {}).get('version')}); "
                   f"a new run from iteration 0", flush=True)
+    if ext is not None:
+        ext.load(ck if resume else None, args, run_dir)
     del ck
     lr_sched, note = WSD.plan(args, lr_prev, it0)
     if note:
@@ -411,10 +425,13 @@ def main(argv=None):
     snap_path = os.path.join(run_dir, "snapshot.pt")
 
     def ckpt_dict(it):
-        return {"net": net.state_dict(), "opt": opt.state_dict(), "args": config, "battler_steps": b_steps,
-                "tactician_steps": t_steps, "iteration": it, "round_eval": round_eval, "v_next": vnext.state(),
-                "team_eval": w_path, "w_refresh": schedule.state(), "lr_schedule": lr_sched.state(),
-                "value_norm": {k: (v.state() if v.seen else None) for k, v in norms.items()}}
+        d = {"net": net.state_dict(), "opt": opt.state_dict(), "args": config, "battler_steps": b_steps,
+             "tactician_steps": t_steps, "iteration": it, "round_eval": round_eval, "v_next": vnext.state(),
+             "team_eval": w_path, "w_refresh": schedule.state(), "lr_schedule": lr_sched.state(),
+             "value_norm": {k: (v.state() if v.seen else None) for k, v in norms.items()}}
+        if ext is not None:
+            d.update(ext.ckpt_extra())
+        return d
 
     def write_snapshot():
         AZ.save_atomic({"net": {k: v.detach().cpu() for k, v in net.state_dict().items()}, "args": config,
@@ -427,7 +444,11 @@ def main(argv=None):
     if args.inference == "gpu":
         from .inference import InferenceServer
         server = InferenceServer(snap_path, n_clients=args.workers + eval_slots)
-    pool = AZ.WorkerPool(args.workers, worker_cfg(args, n_feat), server, args.seed, player=SelfPlayerV3)
+    cfg_w = worker_cfg(args, n_feat)
+    if ext is not None:
+        cfg_w = ext.worker_cfg(cfg_w)
+    pool = AZ.WorkerPool(args.workers, cfg_w, server, args.seed,
+                         player=ext.player if ext is not None else SelfPlayerV3)
     if w_path != args.team_eval:                      # resumed after a refresh
         pool.broadcast("call", ("set_team_eval", (w_path,)))
     replay = AZ.Replay(args.window)
@@ -443,6 +464,8 @@ def main(argv=None):
             pool.broadcast("load", snap_path)
             pool.broadcast("weights", weights.tolist())
             pool.broadcast("call", ("set_v_next", (vnext.table.tolist(),)))
+            if ext is not None:
+                ext.before_play(pool, it)
 
             # ---- 1. self-play ---------------------------------------------------------------------------------
             per_worker = math.ceil(args.decisions_per_iter / args.workers)
@@ -470,6 +493,8 @@ def main(argv=None):
             V2.log_selfplay_v2(tb, stats, bdata, tdata, made, t_play, weights, b_steps, vnext, vcount)
             nt = max(sum(s.get("t_decisions", 0) for s in stats), 1)
             tb.add_scalar("tactician/hint_none_frac", sum(s.get("t_hint_none", 0) for s in stats) / nt, b_steps)
+            if ext is not None:
+                ext.after_play(results, tb, b_steps, it)
 
             # ---- 2. training: the tactician's PPO first (docs §19.7), then the battler ----------------------------
             t0 = time.time()
@@ -499,7 +524,8 @@ def main(argv=None):
                 hook = TeamFeaturesV3(w_path, args.team_eval_module, n_feat, v_next=vnext.table.tolist(),
                                       shaping=False, planner_cfg=args.planner_cfg)
                 round_eval = V2.evaluate_rounds_v2(net, device, args, tb, b_steps, server, snap_path,
-                                                   vnext.table.tolist(), with_search, w_path, hook=hook)
+                                                   vnext.table.tolist(), with_search, w_path, hook=hook,
+                                                   search_kw=ext.eval_search_kw() if ext is not None else None)
                 schedule.observe(it, round_eval)
             t_eval = time.time() - t0
             # ---- 4. W refresh (self-play is paused between iterations) -----------------------------------------

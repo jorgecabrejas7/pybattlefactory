@@ -913,10 +913,11 @@ def log_selfplay_v2(tb, stats, bdata, tdata, made, t_play, weights, step, vnext,
 
 
 def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, with_search, team_eval=None,
-                       hook=None):
+                       hook=None, search_kw=None):
     """Per-round evaluation, network only (greedy), with the tactician's features; optionally network + legal PUCT
     search (--eval-search-sims, the strict sampler: never factory_sets outside training's self-play). hook: the
-    environments' obs_hook (default: v2's features, eval_hook)."""
+    environments' obs_hook (default: v2's features, eval_hook). search_kw: overrides of the search's arguments
+    (alphazero_v4: opponent_prior "experience" and its opponent_model file)."""
     from .eval_rounds import eval_round, eval_round_inprocess
     if hook is None:
         hook = eval_hook(args, v_next, team_eval)
@@ -932,6 +933,9 @@ def evaluate_rounds_v2(net, device, args, tb, step, server, snap_path, v_next, w
         kw = {"n_sims": args.eval_search_sims, "n_determinizations": args.dets, "c_puct": args.c_puct,
               "batch": args.search_batch, "mode": "legal", "seed": 0,
               "opponent_prior": "strict"}   # evaluation: the strict sampler, never the training one
+        kw.update(search_kw or {})
+        if kw["opponent_prior"] == "factory_sets":
+            raise PermissionError("the evaluation search never uses the training-time factory_sets sampler")
         prod = 1.0
         for k in AZ._rounds(args.eval_rounds):
             r = eval_round_inprocess(snap_path, k, args.eval_search_runs, "search", kw,

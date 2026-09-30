@@ -240,15 +240,44 @@ def features_hook(ckpt, args):
     return v3_hook(ckpt, getattr(args, "team_eval", None))
 
 
+def opponent_prior_of(args):
+    """The legal search's opponent sampler for --battler search -> (prior, opponent model path or None).
+    --opponent-prior auto (default): "experience" with the checkpoint's own model for a checkpoint that carries one
+    (alphazero_v4), else "strict". --opponent-model PATH: another model file (or checkpoint) for "experience"."""
+    prior = getattr(args, "opponent_prior", None) or "auto"
+    model = getattr(args, "opponent_model", None)
+    if prior == "auto":
+        prior = "strict"
+        if model is not None or (args.ckpt and ckpt_has_opponent_model(args.ckpt)):
+            prior = "experience"
+    if prior == "experience":
+        model = model or args.ckpt
+        if not ckpt_has_opponent_model(model):
+            raise ValueError(f"--opponent-prior experience: {model} holds no opponent model (--opponent-model PATH)")
+        return prior, model
+    return prior, None
+
+
+def ckpt_has_opponent_model(path):
+    if not path or not os.path.exists(path):
+        return False
+    ck = torch.load(path, map_location="cpu", weights_only=False)
+    return isinstance(ck, dict) and bool(ck.get("opponent_model"))
+
+
 def main_inprocess(args):
     kw = {}
     if args.battler == "search":
         kw = {"n_sims": args.sims, "n_determinizations": args.dets, "c_puct": args.c_puct, "batch": args.batch,
               "mode": args.mode, "allow_perfect": args.mode == "perfect", "seed": args.seed}
-        if args.opponent_prior != "strict":
+        prior, model = opponent_prior_of(args)
+        if prior == "experience":
+            # the player's own experience (rl/opponent_model.py, docs §22): a legitimate agent, like strict
+            kw["opponent_prior"], kw["opponent_model"] = prior, model
+        elif prior != "strict":
             # diagnostic only (docs §22): the ceiling of a learned opponent model, like --mode perfect for information
-            os.environ["PYBATTLE_DIAGNOSTIC_PRIOR"] = args.opponent_prior
-            kw["opponent_prior"] = args.opponent_prior
+            os.environ["PYBATTLE_DIAGNOSTIC_PRIOR"] = prior
+            kw["opponent_prior"] = prior
         if args.impl:
             kw["impl"] = args.impl
     res = {"ckpt": args.ckpt, "battler": args.battler, "search": kw, "runs": args.runs, "seed": args.seed,
@@ -292,8 +321,13 @@ def main():
     p.add_argument("--c-puct", type=float, default=1.5)
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--mode", choices=("legal", "perfect"), default="legal")
-    p.add_argument("--opponent-prior", choices=("strict", "factory_sets"), default="strict",
-                   help="legal search's opponent sampler; factory_sets here is a DIAGNOSTIC ceiling, never an agent")
+    p.add_argument("--opponent-prior", choices=("auto", "strict", "experience", "factory_sets"), default="auto",
+                   help="legal search's opponent sampler (auto: experience for a checkpoint that carries an opponent "
+                        "model, i.e. alphazero_v4, else strict); factory_sets here is a DIAGNOSTIC ceiling, never an "
+                        "agent")
+    p.add_argument("--opponent-model", default=None,
+                   help="experience sampler: the model file (rl/opponent_model.py) or checkpoint holding one "
+                        "(default: the evaluated checkpoint's)")
     p.add_argument("--rounds", default="1-6")
     p.add_argument("--procs", type=int, default=1)
     p.add_argument("--threads", type=int, default=1, help="torch threads per worker")

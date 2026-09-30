@@ -59,7 +59,9 @@ from pybattle.view import _DATA, HP_BAR_PIXELS, NAMES, SPECIES, hp_bar_pixels, p
 
 KEEP = -1
 NUM_NATURES = 25
-PRIORS = ("strict", "factory_sets")     # opponent samplers: player knowledge / the Factory's set list (training)
+# opponent samplers: player knowledge / the Factory's set list (training only) / the player's own experience
+# (rl/opponent_model.py: what the player saw in his own games, allowed everywhere; docs §22)
+PRIORS = ("strict", "factory_sets", "experience")
 MAX_EVS, MAX_EV_PER_STAT = 510, 252
 
 _SPECIES_ID = {v: int(k) for k, v in NAMES["species"].items()}
@@ -426,13 +428,20 @@ def check_prior(prior):
                                   "(evaluation and inference use the strict sampler)")
 
 
-def determinization(view, knowledge=None, rng=None, open_level=True, prior="strict", hint=None):
-    """Gen3Game.determinize specs drawn with the sampler `prior`: "strict" (sample_determinization) or
-    "factory_sets" (sample_factory_sets; training only, needs the opponent's OpponentKnowledge). hint: the
-    attendant's (hint_type, hint_style) about this opponent (None: not used, e.g. Noland's battle): only teams the
-    game would describe with that hint are drawn (hint_of_team; rejection, see the samplers)."""
+def determinization(view, knowledge=None, rng=None, open_level=True, prior="strict", hint=None, model=None,
+                    challenge=0):
+    """Gen3Game.determinize specs drawn with the sampler `prior`: "strict" (sample_determinization),
+    "factory_sets" (sample_factory_sets; training only, needs the opponent's OpponentKnowledge) or "experience"
+    (model: an rl.opponent_model.ExperienceModel; challenge: the run's challenge number, the model's round bucket).
+    hint: the attendant's (hint_type, hint_style) about this opponent (None: not used, e.g. Noland's battle): only
+    teams the game would describe with that hint are drawn (hint_of_team; rejection, see the samplers; the
+    experience model uses it only with its cfg use_hint)."""
     if prior == "strict":
         return sample_determinization(view, None, rng, open_level=open_level, hint=hint)
+    if prior == "experience":
+        if model is None:
+            raise ValueError("the experience sampler needs its model (rl.opponent_model.ExperienceModel)")
+        return model.determinization(view, challenge, rng, open_level=open_level, hint=hint)
     check_prior(prior)
     return sample_factory_sets(view, knowledge, rng, open_level=open_level, hint=hint)
 

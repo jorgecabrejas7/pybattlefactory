@@ -1716,3 +1716,178 @@ mismas que §18b y §19.8):
 Victorias por combate (red sola): 98,1 / 97,8 / 93,6 / 96,8 / 88,2 / 89,2 %. La caída de la tasa (WSD, it. 510–600)
 subió P(6) de ~3,4 % a ~6,7 %. La búsqueda de 512 apenas añade (la red la ha destilado). Siguiente: autopsia de
 derrotas (§21) y la rama "v3-larga" (retomar desde la it. 505 con más iteraciones en fase constante).
+
+## 22. alphazero_v4: modelo del rival aprendido de la propia experiencia (`rl/opponent_model.py`, 2026-09-30)
+
+Decidido por el usuario: v4 = v3 + un **modelo del rival aprendido de lo que el propio agente ha visto en sus
+partidas**, usado por la búsqueda del combatiente en evaluación e inferencia en lugar del muestreador estricto. Todo
+lo demás es v3 (§20). Motivo (§21 y el diagnóstico de techo): con el rival sorteado de la lista de sets
+(`factory_sets`, solo diagnóstico fuera del entrenamiento) la búsqueda legal de 512 de v3 sube de 7,77 % a 9,52 % en
+P(6 rondas); un jugador puede aprender esos sets jugando, pero no puede leer la lista del juego.
+
+### 22.1 Qué observa el jugador (comprobado en el decomp)
+
+Definiciones: **resumen** (*Summary*) es la pantalla que muestra un Pokémon entero (especie, 4 movimientos, objeto,
+habilidad, naturaleza, estadísticas). **Configuración** de un Pokémon = (especie, conjunto de sus movimientos,
+objeto); es lo que el modelo aprende (un set de la Factory sin los EVs).
+
+- **En combate** (`BattleObserver`, `SeenMon`): de cada Pokémon rival que sale, su especie y nivel; los movimientos
+  que usa; su objeto si el juego lo nombra (Restos, una baya consumida, Desarme / Ladrón / Truco); su habilidad si
+  se anuncia; la barra de PS (48 píxeles), el estado, y en cada turno quién actuó primero y cuánto bajó la barra.
+- **Pantalla de intercambio** (tras ganar; `src/battle_factory_screen.c`): se ve el equipo derrotado **solo por su
+  especie** (dibujo y nombre, `Swap_PrintMonSpecies`). La opción «Resumen» solo existe para **nuestro** equipo
+  (`Swap_Task_OpenSummaryScreen` llama a `ShowPokemonSummaryScreen(..., gPlayerParty, ...)`); al elegir un Pokémon
+  rival el juego pasa directamente a «¿Aceptar este Pokémon?» (`Swap_ActionMon` → `Swap_AskAcceptMon`). Así que la
+  pantalla de intercambio no añade nada a lo visto en el combate (para ganar, los tres rivales han salido). **Pero**
+  el Pokémon que nos quedamos pasa a ser nuestro y su resumen lo muestra entero: esa es una configuración real de
+  un rival, vista completa.
+- **Pantalla de alquiler**: los 6 alquileres, enteros (`ShowPokemonSummaryScreen(SUMMARY_MODE_LOCK_MOVES, ...)`).
+  El juego los sortea con el mismo generador y casi del mismo rango de sets que los rivales de la ronda
+  (`GetFactoryMonId`; algunos del rango de la ronda siguiente).
+- **Nunca**: los movimientos no usados, el objeto no nombrado, los IVs / EVs del rival, ni la lista de sets.
+
+`SwapView` / `RentalView` / `BattleView` ya exponían exactamente esto (`swap_candidates` construye el equipo
+derrotado con la especie y lo revelado en el combate).
+
+### 22.2 Qué se registra (`ExperienceCollector`)
+
+Un **registro** es una observación: (fuente, ronda, especie, movimientos, objeto, naturaleza, completo). El
+recolector vigila un `FactoryEnv` (envuelve `step` / `reset`) y solo lee la fase, las vistas, `run_info()` y la
+memoria del combate del jugador (`backend._observer`):
+- en cada pantalla de alquiler: los 6 alquileres, **completos** (fuente `RENTAL`, con su naturaleza);
+- al acabar cada combate (ganado, perdido o cortado): cada rival que salió, **parcial** (especie, movimientos
+  usados, objeto nombrado o «no revelado»); si en la pantalla de intercambio siguiente nos quedamos con uno de
+  ellos, ese registro pasa a ser **completo** (su resumen). Cada rival que sale es exactamente un registro;
+- la ronda es el `challenge_num` en que se vio (cubos 0..6 y 7+ juntos).
+
+### 22.3 El modelo (`ExperienceModel`)
+
+Definiciones, de abajo arriba:
+- **Suavizado** (Dirichlet): a una frecuencia observada se le suman pseudo-cuentas de una distribución de partida,
+  para que lo nunca visto tenga probabilidad pequeña pero no cero.
+- **Especie**: P_r(s) = (n_r(s) + β P(s)) / (N_r + β), con P(s) = (n(s) + a0/|F|) / (N + a0) sobre las especies de
+  la Frontera F (lo que ya sabe el muestreador estricto). n_r(s) = veces vista en la ronda r (rivales 1, alquileres
+  `rental_w` = 1). β = 5 lleva cada ronda hacia la media de todas; a0 = 1.
+- **Configuraciones conocidas** de una especie: las vistas completas alguna vez. Además una opción **«nueva»**: una
+  configuración nunca vista, sorteada con las reglas estrictas (movimientos aprendibles, objeto útil).
+  P_r(c | s) = (n_r(s, c) + β P(c | s)) / (N_r(s) + β); P(c | s) = n(s, c) / (N(s) + a_cfg) y
+  P(nueva | s) = (n(s, nueva) + a_cfg) / (N(s) + a_cfg), a_cfg = 1.
+- **EM** (esperanza-maximización) para los registros parciales: un rival visto en combate con movimientos R y
+  objeto I es compatible con varias configuraciones. Cada avistamiento reparte su cuenta entre las compatibles en
+  proporción a su probabilidad actual (y a «nueva» con la de las reglas estrictas, ver abajo); se repite 3 veces.
+  Así los combates enseñan con qué frecuencia aparece cada configuración como **rival**, no solo como alquiler.
+- **Posterior en una decisión**: para un rival visto (especie s, R, I):
+  P(c) ∝ P_r(c | s) · [R ⊆ movimientos(c)] · [objeto(c) = I si se reveló; si no, que no lo lleve un compañero];
+  P(nueva) ∝ P_r(nueva | s) · L(R, I | s), con L la probabilidad de que el sorteo estricto contenga R
+  (C(L−r, 4−r)/C(L, 4) sobre sus L movimientos aprendibles) y ese objeto. **Nada visto es imposible**: si ninguna
+  configuración conocida lo explica, sale una nueva con las reglas estrictas. Un hueco no visto: especie de P_r(s)
+  sin repetir la de un compañero, y configuración de P_r(c | s) sin repetir objeto.
+- **Lo demás, como el estricto**: IVs al azar, EVs al azar, habilidad a cara o cruz salvo anunciada, PS dentro de
+  la barra. La naturaleza, de las observadas para esa configuración (+1 pseudo-cuenta repartida entre las 25).
+- **Pista** (`use_hint`): se sortean equipos enteros (vectorizado, lotes de 64/256/1024 hasta 512) y se acepta el
+  primero cuya pista (`hint_of_arrays`, especie + movimientos, como el juego) sea la oída; si no hay ninguno, el
+  último (`hint_stats["fallback"]`). En este camino las exclusiones (especie u objeto repetidos) se aplican por
+  rechazo sobre el par (especie, configuración). Coste: 0,15 ms por determinización sin pista, 0,5 ms con pista
+  (el estricto, 0,08 / 4,5 ms).
+- No implementado (opcional en la propuesta): repesar por la barra de PS / el daño y por el orden de velocidad.
+
+**Muestreador «experience»** (`rl/determinize.py` `PRIORS`): permitido en cualquier proceso (es conocimiento del
+jugador), a diferencia de `factory_sets` (solo entrenamiento). `SearchBattler(opponent_prior="experience",
+opponent_model=modelo o ruta)`, `GumbelBattler` igual; `rl.eval_rounds --opponent-prior experience
+--opponent-model RUTA`, y `--opponent-prior auto` (por defecto) usa «experience» con el modelo del propio checkpoint
+si lo lleva (los de v4) y el estricto si no. `strict` sigue disponible; `factory_sets` sigue bloqueado fuera del
+entrenamiento (salvo el diagnóstico explícito).
+
+### 22.4 Por qué respeta la regla de información
+
+- El modelo solo recibe registros construidos desde vistas y la memoria del combate; en la decisión, solo la vista
+  (`view.enemy_party`), la ronda y la pista. Nunca `gEnemyParty`, `gFrontierTempParty`, la lista de sets
+  (`FRONTIER_MONS`, `SET_*`), los pools ni los IVs fijos.
+- Lo que el modelo «sabe» de la lista de sets lo ha visto: alquileres y rivales de sus propias partidas. Es lo que
+  aprende un jugador humano que juega mucho la Factory.
+- Pruebas (`tests/python/test_opponent_model.py`): (a) el código de `rl/opponent_model.py` y `rl/alphazero_v4.py`
+  (sin docstrings ni comentarios) no contiene ninguno de esos nombres; (b) el recolector, ejecutado sobre un backend
+  «solo jugador» que falla si se toca otra cosa que la fase, las vistas, `run_info` y la memoria del combate, da los
+  mismos registros que sobre el backend real; y los registros son fieles (el Pokémon tomado es el del rival
+  entero); (c) se sobrescribe el rival real (ids de sets y los huecos no vistos) y el muestreador y la búsqueda dan
+  exactamente lo mismo. Además: guardar / cargar, determinismo de la actualización en línea (mismo resultado en
+  cualquier reparto y orden de los registros), exp(log P) = frecuencia del muestreador, rechazo por pista, búsqueda,
+  `eval_rounds` y una ejecución diminuta de v4 de extremo a extremo (con reanudación).
+
+### 22.5 Aprendizaje en línea y arranque en caliente
+
+- **En línea** (`rl/alphazero_v4.py`): cada proceso de autojuego lleva un recolector en su entorno; `play()` devuelve
+  los registros nuevos (`opp_obs`) junto a las muestras; el proceso principal los suma **en el orden de los
+  procesos** (determinista) al modelo en cada iteración. Las simulaciones de las búsquedas y los combates simulados
+  del refresco de W no se registran (no son partidas vistas). Las cuentas se guardan en cada checkpoint
+  (`opponent_model`) y en `runs/<nombre>/opponent_model.pt`; al reanudar se recuperan. Registros en TensorBoard:
+  `opp_model/*`.
+- **Arranque en caliente** (`python -m rl.opponent_model_data collect`): registros de 30.006 combates jugados por
+  alphazero_v3 (red sola, voraz, los dos agentes con sus rasgos; rachas que empiezan en las rondas 1–6), con el
+  mismo recolector: 120.925 registros (89.005 avistamientos de rivales, 12.681 de ellos completos por intercambio;
+  31.920 alquileres), 514 configuraciones y 109 especies. 157 s con 18 procesos. `runs/opp_model_v3/model.pt`.
+- Cada iteración de v4 añade ~3.000 combates: a las pocas iteraciones los datos en línea superan al arranque.
+
+### 22.6 Validación
+
+**(1) Probabilidad del rival verdadero.** Combates apartados: 3.006 combates de v3 con otras semillas
+(`opponent_model_data heldout`, 34.228 decisiones); de cada combate 3 decisiones al azar; en cada una, cada hueco
+rival vivo. La etiqueta (la configuración verdadera, leída de `gEnemyParty` al empezar el combate) solo se usa para
+puntuar. Medidas:
+- **log P media**: logaritmo natural de la probabilidad que el muestreador da a la configuración verdadera de ese
+  hueco (más alto es mejor; +1 = e ≈ 2,7 veces más probabilidad). Suelo de log 1e-12 para lo imposible (0,06 %:
+  movimientos copiados, imposibles también para el estricto).
+- **top-k**: fracción en que la configuración verdadera está entre las k más probables del modelo (huecos no vistos:
+  sobre especie × configuración).
+- **Referencia factory_sets**: la misma medida con el sorteo uniforme de los sets del pool de la ronda compatibles
+  con lo visto (lee la lista del juego: solo como techo).
+
+| | Huecos | log P modelo | log P estricto | log P ref. factory_sets | top-1 | top-5 | top-10 |
+|---|---|---|---|---|---|---|---|
+| Todos | 18.026 | **−2,71** | −17,78 | −2,68 | 0,436 | 0,519 | 0,545 |
+| No vistos | 8.949 | −5,14 | −22,47 | −5,10 | 0,009 | 0,042 | 0,085 |
+| Vistos (vivos) | 9.077 | −0,31 | −13,16 | −0,29 | 0,856 | 0,990 | 0,999 |
+
+Con los 3.000 primeros combates el modelo ya da −2,84 (casi lo mismo). Por ronda, log P −2,3 en las rondas 1–4
+(pool de 96 sets) y −3,5 en las 5–7 (510 sets); el estricto, −17,5 a −18,1 en todas. Variantes (misma prueba):
+sin alquileres (`rental_w` 0) −4,60 y el 7,6 % de configuraciones imposibles (muchas configuraciones solo se ven
+completas en el alquiler); β = 1 −2,70, β = 20 −2,74, una sola vuelta de EM −2,71, a_cfg 0,1 o 5 sin cambios.
+**Con la pista** (Monte Carlo, 200 equipos por decisión, 2.845 huecos no vistos): log P de la especie −4,79 → −3,87
+y de la configuración −5,75 → −4,82 (0,9 nats mejor), con un 1,5 % de sorteos sin ningún equipo compatible.
+
+**(2) Juego: alphazero_v3 + búsqueda legal de 512** (8 determinizaciones, 512 rachas por ronda, semilla 777, las
+mismas que §20.6), cambiando solo el muestreador del rival:
+
+| Muestreador del rival | R1 | R2 | R3 | R4 | R5 | R6 | P(6 rondas) |
+|---|---|---|---|---|---|---|---|
+| estricto (§20.6) | 87,3 | 86,5 | 63,5 | 79,3 | 45,5 | 44,9 | 7,77 % |
+| **experience** (arranque en caliente, sin pista) | 87,3 | 86,9 | 64,5 | 77,0 | 50,2 | 47,7 | **9,02 %** |
+| experience con pista | 87,7 | 83,6 | 64,3 | 79,7 | 48,2 | 48,8 | 8,84 % |
+| factory_sets (techo de diagnóstico, lee la lista) | 88,3 | 86,1 | 67,2 | 79,5 | 50,2 | 46,7 | 9,52 % |
+
+Victorias por combate en las rondas 5 / 6: estricto 89,1 / 89,7 %; experience 90,5 / 90,5 %; con pista 90,0 /
+90,7 %; factory_sets 90,5 / 90,1 %. Error típico de P(6) ≈ ±0,7 puntos por fila (las filas comparten semillas, así
+que sus diferencias tienen algo menos de ruido). Coste: 44–48 ms por decisión, igual que el estricto.
+
+Lectura: el modelo aprendido recupera ~70 % de la distancia entre el estricto y el techo `factory_sets`
+(+1,25 puntos de P(6), +1,4 / +0,8 puntos de victorias por combate en las rondas 5 / 6), sin leer nada que el
+jugador no haya visto. La pista mejora la probabilidad del rival (22.6 (1)) pero en el juego no se nota (8,84 %,
+dentro del ruido): se deja **desactivada** por defecto (`use_hint` false; activable con `--opponent-model-cfg
+'{"use_hint": true}'`).
+
+### 22.7 Lanzamiento de alphazero_v4
+
+- Desde cero, como v3: `python -m rl.alphazero_v4` con los valores por defecto de v4 = los del lanzamiento de v3
+  (`--team-eval runs/team_eval_v3/model.pt --t-imitation 0.1 --eval-every 3 --eval-search-every 15`), 1.500
+  iteraciones con WSD (caída en el último 15 %: iteraciones 1275–1499), Gumbel 256 y `factory_sets` en la búsqueda
+  de entrenamiento (como v3), refresco de W, planificador y pistas sin cambios.
+- Modelo del rival: arranca de `runs/opp_model_v3/model.pt` (22.5) y aprende en línea; la evaluación con búsqueda
+  (cada 15 iteraciones, 512 simulaciones) usa el muestreador «experience» con el modelo del momento.
+- `rl.eval_rounds --battler search` sobre un checkpoint de v4 usa por defecto su propio modelo.
+
+```bash
+python -m rl.alphazero_v4 --name alphazero_v4 --opponent-model-init runs/opp_model_v3/model.pt \
+    --team-eval runs/team_eval_v3/model.pt --t-imitation 0.1 --eval-every 3 --eval-search-every 15 --iterations 1500
+python -m rl.opponent_model_data collect --ckpt runs/alphazero_v3/latest.pt --battles 30000 --out runs/opp_model_v3/model.pt
+python -m rl.opponent_model_data validate --model runs/opp_model_v3/model.pt --heldout runs/opp_model_v3/heldout.pkl --per-battle 3
+```
