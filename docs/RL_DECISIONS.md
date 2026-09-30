@@ -1701,3 +1701,18 @@ duración). `--estimate` la recalcula para cualquier combinación de presupuesto
   nuestro).
 - La recogida no es reproducible bit a bit entre ejecuciones (el planificador del táctico sortea rivales sin semilla,
   como en la evaluación); el análisis sí lo es, porque parte de las acciones registradas.
+
+### 20.6 Resultado final de alphazero_v3 (2026-09-30)
+600 iteraciones (24 M decisiones del combatiente, ~24 h). Evaluación final, 512 rachas por ronda, semilla 777 (las
+mismas que §18b y §19.8):
+
+| | R1 | R2 | R3 | R4 | R5 | R6 | P(6 rondas) |
+|---|---|---|---|---|---|---|---|
+| PPO v3, red sola | 69,3 | 71,3 | 39,1 | 56,6 | 21,3 | 19,7 | 0,46 % |
+| AZ v2 + búsqueda 512 | 80,1 | 75,2 | 47,1 | 68,6 | 29,9 | 26,6 | 1,55 % |
+| **AZ v3, red sola** | 87,7 | 85,5 | 61,5 | 79,5 | 42,0 | 43,2 | **6,65 %** |
+| **AZ v3 + búsqueda legal 512** | 87,3 | 86,5 | 63,5 | 79,3 | 45,5 | 44,9 | **7,77 %** |
+
+Victorias por combate (red sola): 98,1 / 97,8 / 93,6 / 96,8 / 88,2 / 89,2 %. La caída de la tasa (WSD, it. 510–600)
+subió P(6) de ~3,4 % a ~6,7 %. La búsqueda de 512 apenas añade (la red la ha destilado). Siguiente: autopsia de
+derrotas (§21) y la rama "v3-larga" (retomar desde la it. 505 con más iteraciones en fase constante).
