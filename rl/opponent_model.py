@@ -71,7 +71,7 @@ N_BUCKETS = 8                       # challenge 0..6, 7+ together (rounds 1..7, 
 OPP, RENTAL = 0, 1
 VERSION = 1
 DEFAULT_CFG = {"a0": 1.0, "a_cfg": 1.0, "beta": 5.0, "rental_w": 1.0, "a_nat": 1.0, "em_iters": 3,
-               "use_hint": False, "max_hint_tries": 512, "level": 100}
+               "use_hint": False, "max_hint_tries": 512, "level": 100}   # use_hint: validated in docs §22.6
 
 
 def bucket_of(challenge):
