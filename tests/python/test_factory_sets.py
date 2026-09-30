@@ -85,9 +85,11 @@ def test_factory_sets_is_training_only(monkeypatch):
     import rl.eval_rounds
     import rl.evaluate
     assert "factory_sets" not in inspect.getsource(rl.evaluate)
-    # eval_rounds: only the explicit diagnostic flag (default strict) enables it, through the env var below
+    # eval_rounds: only the explicit diagnostic flag enables it, through the env var below (the default "auto" is
+    # strict, or the experience model of a checkpoint that carries one: rl.eval_rounds.opponent_prior_of)
     src = inspect.getsource(rl.eval_rounds)
-    assert src.count("factory_sets") == 2 and 'default="strict"' in src
+    assert src.count("factory_sets") == 2 and 'default="auto"' in src
+    assert "factory_sets" not in inspect.getsource(rl.eval_rounds.opponent_prior_of)
     monkeypatch.delenv("PYBATTLE_DIAGNOSTIC_PRIOR", raising=False)
     with pytest.raises(PermissionError):
         D.check_prior("factory_sets")

@@ -13,7 +13,9 @@ K determinizations, each a deterministic tree over our decisions in this battle:
              refused unless in_training(); rl/alphazero.py's default) draws the opponent's species, moves and
              items from the Factory's set list instead (rl/determinize.py sample_factory_sets; IVs, EVs and
              nature still random), with what the player knows of the team's generation
-             (backend.opponent_knowledge);
+             (backend.opponent_knowledge); opponent_prior="experience" (allowed everywhere, alphazero_v4's
+             evaluation) draws them from what the player saw in his own games (rl/opponent_model.py,
+             opponent_model=ExperienceModel or its file);
     perfect  the true state. A ceiling for evaluation only: it needs allow_perfect=True and is refused inside
              training (mark_training(), called by rl/train.py, rl/train_rainbow.py and rl/alphazero.py), by the
              SearchBattler (its
@@ -83,7 +85,8 @@ _RNG = S.addr("gRngValue")
 
 # ---- the perfect-information guard ----------------------------------------------------------------------------
 TRAINING_ENV = "PYB_TRAINING"
-_TRAINING_MAINS = ("rl.train", "rl.train_rainbow", "rl.alphazero", "rl.alphazero_v2")
+_TRAINING_MAINS = ("rl.train", "rl.train_rainbow", "rl.alphazero", "rl.alphazero_v2", "rl.alphazero_v3",
+                   "rl.alphazero_v4")
 
 
 def mark_training():
@@ -256,10 +259,11 @@ def to_backend_action(a: int):
 class SearchBattler:
     def __init__(self, policy, n_sims=256, n_determinizations=8, c_puct=1.5, batch=32, mode="legal",
                  allow_perfect=False, seed=0, max_decisions=MAX_DECISIONS, virtual_loss=1.0, native_tree=None,
-                 impl=None, observer="auto", evaluator=None, opponent_prior="strict"):
-        """opponent_prior: the legal mode's opponent sampler, "strict" (player knowledge, the default and the only
-        one outside training) or "factory_sets" (the Factory's set list: training-time search only, refused
-        otherwise; rl/determinize.py). impl: "cpp" | "python" | None (cpp when built and the native tree is not refused). observer (cpp impl):
+                 impl=None, observer="auto", evaluator=None, opponent_prior="strict", opponent_model=None):
+        """opponent_prior: the legal mode's opponent sampler, "strict" (player knowledge, the default), "experience"
+        (rl/opponent_model.py: learned from what the player saw in his own games; allowed everywhere; needs
+        opponent_model, an ExperienceModel or the path of a file / checkpoint holding one) or "factory_sets" (the
+        Factory's set list: training-time search only, refused otherwise; rl/determinize.py). impl: "cpp" | "python" | None (cpp when built and the native tree is not refused). observer (cpp impl):
         "cpp" (ObsMemory) | "python" (BattleObserver called from C++) | "auto". evaluator: optional
         f(batch dict of numpy arrays) -> (priors [B, 7], values [B] in [0, 1]) replacing the policy's network
         (tests, an inference server)."""
@@ -272,6 +276,9 @@ class SearchBattler:
                 raise PermissionError("perfect-information search is never allowed in training")
         DET.check_prior(opponent_prior)                 # factory_sets: training only (PermissionError otherwise)
         self._prior = opponent_prior
+        self.opponent_model = None
+        if opponent_prior == "experience":
+            self.set_opponent_model(opponent_model)
         if mode == "legal" and not HAS_DETERMINIZE:
             raise RuntimeError("legal-mode search needs Gen3Game.determinize (rebuild the extension)")
         if impl is None:
@@ -309,6 +316,19 @@ class SearchBattler:
         self.redraws = 8
         self.redraw_failed = 0          # roots whose last redraw still changed what the player can do
         self._net_calls, self._eval_ms = 0, 0.0
+
+    def set_opponent_model(self, model):
+        """The experience sampler's model: an rl.opponent_model.ExperienceModel, or a path to load one from."""
+        if self._prior != "experience":
+            raise ValueError(f"this search draws opponents with {self._prior!r}, not from an experience model")
+        if model is None:
+            raise ValueError("opponent_prior='experience' needs opponent_model (an ExperienceModel or a path)")
+        if isinstance(model, str):
+            from .opponent_model import ExperienceModel
+            model = ExperienceModel.load(model)
+        self.opponent_model = model
+        model.compile()
+        return model
 
     @property
     def opponent_prior(self):
@@ -382,6 +402,11 @@ class SearchBattler:
         knowledge = getattr(backend, "opponent_knowledge", None) if self._prior == "factory_sets" else None
         if self._prior == "factory_sets" and knowledge is None:
             raise ValueError("factory_sets needs backend.opponent_knowledge (a SimBackend run past a rental)")
+        det_kw = {}
+        if self._prior == "experience":
+            info = backend.run_info()
+            det_kw = {"model": self.opponent_model, "challenge": info.challenge_num,
+                      "hint": DET.battle_hint(view, info.noland)}
         truth = (backend.game.unusable_moves(0), backend.game.can_switch(0))
         for _ in range(self.K):
             obs = copy_obs()
@@ -390,7 +415,7 @@ class SearchBattler:
                 # redraw determinizations that would change it (e.g. a Shadow Tag / Arena Trap ability drawn)
                 for attempt in range(self.redraws):
                     g = backend.game.clone()
-                    specs = DET.determinization(view, knowledge, self.rng, backend.open_level, self._prior)
+                    specs = DET.determinization(view, knowledge, self.rng, backend.open_level, self._prior, **det_kw)
                     g.determinize(specs, hidden, self.rng.getrandbits(32))
                     if forced or (g.unusable_moves(0), g.can_switch(0)) == truth:
                         break

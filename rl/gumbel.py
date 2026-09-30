@@ -105,14 +105,14 @@ class GumbelBattler(SearchBattler):
 
     def __init__(self, evaluator, n_sims=256, n_determinizations=8, batch=32, seed=0, max_considered=16,
                  c_visit=50.0, c_scale=0.1, rescale=True, non_root="gumbel", c_puct=1.5, observer="auto",
-                 opponent_prior="strict"):
+                 opponent_prior="strict", opponent_model=None):
         if observer == "auto" and encode.VERSION not in encode.CPP_VERSIONS:
             observer = "python"
         if non_root not in ("gumbel", "puct"):
             raise ValueError(f"non_root must be 'gumbel' or 'puct', not {non_root!r}")
         super().__init__(None, n_sims=n_sims, n_determinizations=n_determinizations, c_puct=c_puct, batch=batch,
                          mode="legal", seed=seed, impl="cpp", observer=observer, evaluator=evaluator,
-                         opponent_prior=opponent_prior)
+                         opponent_prior=opponent_prior, opponent_model=opponent_model)
         if not hasattr(self.searcher, "search_gumbel"):
             raise RuntimeError("GumbelBattler needs pybattle_native.Searcher.search_gumbel (rebuild the extension)")
         self.max_considered, self.c_visit, self.c_scale, self.rescale = max_considered, c_visit, c_scale, rescale
