@@ -1905,3 +1905,147 @@ Con información perfecta y la red de v3, el combatiente gana ~94 % de los comba
 reto de forma consistente **no es alcanzable con la red actual ni conociendo al rival**; hace falta una red (valor y
 política) mucho mejor, que suba el techo, o equipos mejores. alphazero_v4 (modelo del rival aprendido de la experiencia,
 1500 iteraciones, desde cero) se lanzó igualmente, como decidió el usuario.
+
+## 24. alphazero_v3 en el juego real: velocidad, agentes, registros, repetición exacta y vídeo (2026-10-01)
+
+Objetivo (decidido por el usuario): jugar el reto en el juego **real** (el emulador con la ROM, no el simulador) lo
+más rápido posible con el mejor checkpoint de v3, registrar todo lo que el agente sabe en cada decisión y, cuando una
+racha complete el reto (42 victorias, la última contra Noland con el símbolo de oro), **repetirla exactamente** con la
+interfaz completa y grabarla en vídeo. Código: `pybattle/emu/options.py`, `pybattle/emu/mirror.py`,
+`rl/real_agents.py`, `rl/real_play.py`, `scripts/play_real.py`, `scripts/real_play.sh`; pruebas en
+`tests/python/test_real_play.py`.
+
+### 24.1 Definiciones (de abajo arriba)
+- **Fotograma** (*frame*): la consola dibuja 60 imágenes por segundo y el juego avanza su lógica una vez por
+  fotograma. "Velocidad ×2" = 120 fotogramas por segundo de reloj.
+- **Sin tope** (*uncapped*): el emulador ejecuta fotogramas tan rápido como puede la CPU, sin esperar al reloj.
+- **Renderizar**: convertir la memoria de vídeo de la consola en una imagen. Es solo salida: no cambia la lógica del
+  juego. **Frameskip n**: dibujar una imagen de cada n + 1 fotogramas; con n enorme no se dibuja nunca (sin ventana no
+  hace falta).
+- **Opciones del juego**: el menú OPCIONES guarda en `SaveBlock2` (offset 0x14) la velocidad del texto (3 bits:
+  lenta / media / rápida) y "Escena de combate" (1 bit, `optionsBattleSceneOff`: con 1 no se muestran las animaciones
+  de los movimientos). El juego las lee en el momento, así que escribirlas en RAM tras cargar la partida equivale a
+  elegirlas en el menú. El .sav del disco nunca se toca (el emulador guarda en una copia en memoria).
+- **Generador aleatorio** (RNG, `gRngValue`): un número de 32 bits que cada llamada a `Random()` transforma con una
+  fórmula fija (congruencial lineal). Mismo valor y mismas llamadas ⇒ mismos números.
+- **Savestate**: una foto completa del estado del emulador (CPU, RAM, vídeo, temporizadores). Cargarla y dar las
+  mismas pulsaciones reproduce exactamente la misma partida. **No incluye** la memoria de guardado del cartucho
+  (*flash*, donde el juego guarda la partida), así que se guarda aparte.
+- **Reloj del cartucho** (RTC): Esmeralda lleva un reloj de tiempo real. Por defecto mGBA le da la hora del ordenador,
+  que cambia entre una partida y su repetición. Ahora el reloj **empieza en una fecha fija y avanza con los fotogramas
+  emulados** (`set_rtc_fake_epoch`): el contador de fotogramas va en el savestate, así que la hora que ve el juego en
+  una repetición es la misma.
+- **Determinismo**: mismo estado inicial + mismas entradas ⇒ mismos fotogramas, mismo RNG, mismo resultado. El
+  emulador lo es, y el conductor (`pybattle/emu/driver.py`) también, porque decide qué teclas pulsa leyendo la RAM.
+- **Espejo** (*mirror*): una copia del combate actual en el simulador que avanza a la par que el emulador (24.4).
+
+### 24.2 Velocidad
+Cambios: el host del emulador (`emu/host/emulator.cpp`) gana `set_frameskip`, `set_rtc_fake_epoch` y
+`save_data` / `load_save_data` (la flash); `EmuBackend(options=, frameskip=, rtc_epoch_ms=)` los aplica (por
+defecto, todo como antes). Hay que **recompilar** `pybattle_emu` en la copia principal
+(`cmake --build build --target pybattle_emu`).
+
+Medidas (`play_real.py bench`, 40 combates por fila desde la racha 0, 1 hilo de torch, 2 procesos a la vez, máquina
+cargada por el entrenamiento de v4; "fotogramas/combate" incluye lo que pasa entre combates: sala, encargado, cambio):
+
+| Combatiente | Escena | Dibuja | Combates/hora/proceso | Fotogramas/combate | ms por decisión del combatiente |
+|---|---|---|---|---|---|
+| red sola | off | no | **807** | 11.519 | 3,5 |
+| red sola | off | sí | 731 | 11.519 | 3,1 |
+| red sola | on | no | 601 | 16.065 | 3,7 |
+| búsqueda 512 | off | no | **897** | 8.828 | 66 |
+| búsqueda 512 | on | no | 666 | 13.592 | 66 |
+
+(Cada fila juega combates distintos, así que la duración de los combates varía por azar; el agente se lleva el 14 %
+del tiempo con búsqueda y el 2 % con la red sola: casi todo es emular.) Lectura: el emulador corre a ~2.300–2.700
+fotogramas/s (~40× la velocidad real); no dibujar ahorra ~10 %; quitar las animaciones, ~25–30 % de los fotogramas; el
+texto ya estaba en "rápido" en la partida del usuario. La búsqueda de 512 simulaciones cuesta ~66 ms por decisión en
+CPU (el árbol en C++): **apenas reduce el ritmo**.
+
+### 24.3 ¿Cambian las opciones el juego? (experimento)
+- **Dentro de un combate, no.** En combates de la Frontera el juego no avanza el RNG en cada fotograma
+  (`VBlankCB_Battle` lo salta con `BATTLE_TYPE_FRONTIER`) y las animaciones no llaman a `Random()`. Prueba: el espejo
+  en el simulador (que no tiene animaciones) coincide byte a byte con el emulador en 100 decisiones con la escena
+  apagada y en 82 con la escena encendida, también en un combate contra Noland.
+- **Fuera de los combates, sí.** Una racha jugada con la escena apagada y repetida con la escena **encendida** coincide
+  en el RNG en las 31 primeras decisiones (3 combates) y luego diverge **en el mundo exterior** tras el 3.er combate
+  (`CB2_Overworld`): allí el número de llamadas a `Random()` depende del número absoluto de fotogramas (que las
+  animaciones cambian) y los rivales siguientes salen distintos. Por tanto **una repetición tiene que usar las mismas
+  opciones que la partida** (consistencia del estado): el registro guarda las opciones y la repetición las reutiliza
+  (`--scene on/off` existe para experimentar y avisa de cada divergencia).
+- **Compromiso elegido**: la escena apagada da ~25–30 % más combates por hora, pero el primer reto completo llega en
+  pocos cientos de combates (P(6 rondas) ≈ 9 % con búsqueda, §22.6), es decir en minutos u horas, así que la velocidad
+  importa poco y un vídeo con animaciones se entiende mucho mejor. Lanzamiento: **2 procesos con búsqueda y la escena
+  encendida** (su reto completo se graba con animaciones) + **1 con la red sola y la escena apagada** (la configuración
+  más rápida). `--scene off` vale para todos si se prefiere velocidad.
+
+### 24.4 Los agentes (`rl/real_agents.py`, `V3Player`)
+- **Táctico**: exactamente el de la evaluación (`rl.eval_rounds` con `--features auto`): la red de
+  `runs/alphazero_v3/latest.pt`, voraz, con sus rasgos por opción de `rl.alphazero_v3.features_hook` (la W con la que
+  entrenó, `team_eval_0580.pt`, su tabla V_siguiente y el planificador de profundidad 1) y la pista del encargado
+  (ninguna antes de Noland). El planificador sortea sus 8 rivales con una **semilla por decisión** que se registra (en
+  la evaluación se sorteaban sin semilla: misma distribución, pero así cada decisión es reproducible).
+- **Combatiente, modo red**: el argmax de la política de la red.
+- **Combatiente, modo búsqueda**: `SearchBattler` legal, 512 simulaciones, 8 determinizaciones, c_puct 1,5, rivales
+  del modelo de la experiencia (`runs/opp_model_v3/model.pt`, §22).
+- **La búsqueda en el emulador**: la búsqueda clona y avanza un `Gen3Game` nativo, que el emulador no tiene. Pero el
+  simulador *es* el código de combate del juego y, desde el punto de partida del combate (los dos equipos, las
+  banderas del combate, los datos de la Frontera y el RNG en `BeginBattleIntro`) y con las mismas acciones, reproduce
+  la RAM de combate y el RNG del emulador byte a byte (`pybattle.diff`). Así que `WatchedMachine` mira en cada
+  fotograma si empieza un combate y guarda ese punto de partida; `SimMirror` arranca con él un combate en el
+  simulador, lo lleva a cada decisión, **lo compara** con el emulador (RNG, regiones de combate, los dos equipos) y le
+  da la misma acción que al emulador. `MirroredBackend` presenta a la búsqueda las vistas del emulador con el juego del
+  simulador. Si alguna comparación fallase, ese combate sigue con la red (`search_fallback`); en las pruebas no ha
+  fallado nunca. (La información oculta del rival se sigue sorteando: la búsqueda legal sobrescribe lo no visto.)
+- **Paridad**: en 400 decisiones de un `FactoryEnv` (desde la ronda 3), `V3Player` elige exactamente la misma acción
+  que los agentes de `eval_rounds` (prueba `test_agent_parity_with_eval`).
+- **"Victorias esperadas" del táctico**: su crítico aprendió el retorno con *shaping*, victorias − Φ(s) (§19); por eso
+  se muestra crítico + Φ, con Φ = la media de Q_plan de los alquileres, o la Q_plan de quedarse en un cambio.
+
+### 24.5 Registros (`rl/real_play.py`)
+Una **racha** (*run*) va desde el vestíbulo hasta perder (después de 42 victorias sigue jugando). Por proceso, en
+`runs/real_play/w<k>/`:
+- `runs/run_NNNNN/`: `start.state.z` (savestate en el vestíbulo justo antes de empezar), `save.z` (la flash),
+  `run.json` (argumentos del inicio, opciones, reloj, banderas del conductor, agente y semillas), `actions.jsonl`
+  (cada decisión: fase, acción, RNG y fotograma en ese momento, racha, combate y los detalles del agente; y cada fin
+  de combate) y `result.json`. Una racha con 42 victorias también tiene `FULL_WIN.json` y una línea en
+  `runs/real_play/full_wins.jsonl`. Se borran los savestates de rachas viejas y cortas (se guardan los de las 40
+  últimas, los de ≥ 14 victorias y los de los retos completos).
+- `playlog.jsonl`: `rl.playlog.PlayLogger` (lo escribe otro agente; mientras no esté, `rl/playlog_stub.py` con la
+  misma interfaz): en cada decisión la vista, la política (probabilidades y valor) y los extras: rasgos por opción
+  del táctico (W normal / último, E_ronda, Δ, Q_plan, Φ), la pista, visitas y Q de la búsqueda, y las creencias del
+  modelo del rival sobre cada Pokémon rival (los 3 sets más probables y la probabilidad de un set nunca visto).
+- `stats.json`: rachas, combates, combates/hora, la mejor racha, retos completos, desincronizaciones del espejo.
+
+### 24.6 Repetición exacta y vídeo
+- `replay_run`: un emulador nuevo recibe el savestate, la flash, el reloj y (van en la RAM del savestate) las mismas
+  opciones; se empieza la racha con los mismos argumentos y se le dan **las acciones registradas, sin recalcular
+  nada**. En cada decisión se comprueban la fase, el RNG y el número de fotograma, y en cada combate el resultado.
+  Prueba: una racha corta con búsqueda se repite idéntica (`test_replay_is_deterministic`), dibujando o sin dibujar.
+- `record_run`: la misma repetición con la ventana completa (SDL sin pantalla) a **×2**: un fotograma de vídeo cada 4
+  fotogramas emulados (30 imágenes/s), así que el vídeo va exactamente a ×2 aunque se grabe más deprisa; en cada
+  decisión la imagen se mantiene 0,5 s para que se lean los paneles. 1920×1080, H.264 con NVENC (un codificador de la
+  GPU aparte de los núcleos que usa el entrenamiento; si no, libx264). Junto al .mp4 se copian `actions.jsonl` y
+  `run.json`. Se para tras la 42.ª victoria. Prueba: 1 combate = 1,9 min de vídeo grabados en 0,6 min.
+- Automático: el supervisor (`play_real.py play`) vigila `full_wins.jsonl`; con el primer reto completo pausa un
+  proceso (el de la red sola) para no pasar de 3 emuladores, graba en `runs/real_play/videos/` y lo reanuda.
+
+### 24.7 La ventana (`pybattle/emu/viewer.py`, `ui.py`)
+- Cabecera: fase, ronda, combate n/7 (con NOLAND), racha, victorias de la racha, modo (red / búsqueda 512 / REPLAY).
+- Combatiente: P(ganar este combate) según la red; por acción, la probabilidad de la red, las visitas de la búsqueda
+  (en %) y su Q (resultado medio de sus simulaciones, 1 = victoria), y el daño estimado (o el riesgo en los cambios).
+- Táctico: cada opción con π, E_ronda, W normal / último, Q_plan y Δ (en el alquiler, las 8 más probables + la
+  elegida + la de mejor Q_plan, marcada ★), las victorias esperadas y la pista del encargado.
+- Modelo del rival (panel bajo la pantalla del juego): por cada Pokémon rival, lo revelado y sus 3 sets más probables
+  (objeto y movimientos) con su probabilidad; de los no vistos, las especies más probables.
+
+### 24.8 Uso
+```bash
+scripts/real_play.sh                                   # 2 búsqueda (escena on) + 1 red (escena off), en segundo plano
+python scripts/play_real.py status --out runs/real_play
+touch runs/real_play/STOP                              # parar; reanudar: scripts/real_play.sh --resume
+python scripts/play_real.py verify runs/real_play/w0/runs/run_00012
+python scripts/play_real.py replay runs/real_play/w0/runs/run_00012 --speed 2       # en la ventana
+python scripts/play_real.py record RUN --video win.mp4 --until-wins 42
+python scripts/watch.py --rom ROM --save SAV --v3 search --speed 2                  # mirar en directo
+```

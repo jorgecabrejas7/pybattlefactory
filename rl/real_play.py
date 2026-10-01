@@ -170,6 +170,8 @@ def play_worker(wid, out, rom, save, mode="search", seed=0, hours=0.0, sims=512,
         first_reset = json.load(open(os.path.join(last, "run.json")))["reset"]
     else:
         be = make_backend(rom, save, options=options)
+        # workers booted from the same save would start with the same overworld RNG: offset each by some frames
+        be.d.emu.run_frames(1 + 977 * wid + 13 * seed)
         first_reset = {"win_streak": 0, "rents_count": 0}       # the first run starts at streak 0 whatever the save had
     player_seed = seed * 1000 + wid * 7919 + stats["runs"]
     player = V3Player(mode=mode, sims=sims, threads=threads, seed=player_seed)
@@ -254,7 +256,8 @@ def play_run(be, player, w, logger, stop, wid, run_id, out, log, max_battles=0):
         if max_battles and battles >= max_battles:
             cut = True
             break
-        if stop["flag"]:
+        if stop["flag"] or os.path.exists(os.path.join(out, "STOP")) or \
+                os.path.exists(os.path.join(out, f"w{wid}", "STOP")):
             raise Stop()
         phase = be.phase
         view, info = be.view(), be.run_info()
