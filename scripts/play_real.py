@@ -226,7 +226,8 @@ def cmd_record(a):
     from rl.real_play import record_run
     size = tuple(int(v) for v in a.size.lower().split("x"))
     rep = record_run(a.run, a.rom, a.save, a.video, until_wins=a.until_wins or None, game_speed=a.speed, fps=a.fps,
-                     size=size, hold=a.hold, scene=a.scene, codec=a.codec, headless=not a.show)
+                     size=size, hold=a.hold, scene=a.scene, codec=a.codec, headless=not a.show,
+                     from_wins=a.from_wins)
     if a.report:
         json.dump(rep, open(a.report, "w"), indent=1)
     print(json.dumps({k: rep[k] for k in ("ok", "battles", "wins", "video", "video_seconds", "wall_seconds", "codec")}))
@@ -356,6 +357,8 @@ def main():
             p.add_argument("--speed", type=int, default=2, help="game speed (x real time)")
         if name == "record":
             p.add_argument("--video", required=True)
+            p.add_argument("--from-wins", type=int, default=0,
+                           help="fast-forward until that many wins, then record (35: round 6 only)")
             p.add_argument("--fps", type=int, default=30)
             p.add_argument("--size", default="1920x1080")
             p.add_argument("--hold", type=float, default=0.5, help="seconds of video the panels stay at each decision")

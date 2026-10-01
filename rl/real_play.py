@@ -405,8 +405,12 @@ class RecordingMachine:
         self.fps = fps
         self.n = 0
         self.video_frames = 0
+        self.active = True                  # False: emulate without drawing or recording (fast-forward)
 
     def run_frames(self, n: int = 1):
+        if not self.active:
+            self.emu.run_frames(n)
+            return
         for _ in range(n):
             self.emu.run_frames(1)
             self.n += 1
@@ -428,7 +432,7 @@ class RecordingMachine:
     def hold(self, seconds):
         """Keep the current picture for `seconds` of video (decision panels)."""
         k = int(round(seconds * self.fps))
-        if k > 0:
+        if k > 0 and self.active:
             self.viewer._capture(self.emu, 0.0)                    # the picture at the decision itself
             self.show(k)
 
@@ -470,8 +474,9 @@ def _nvenc_ok():
 
 
 def record_run(run_dir, rom, save, video_path, until_wins=FULL_WIN, game_speed=2, fps=30, size=(1920, 1080),
-               hold=0.5, scene="same", theme="dark", codec="auto", headless=True, log=print):
-    """Replay a run with the full UI and write it to `video_path` (mp4). -> replay report (plus video info)."""
+               hold=0.5, scene="same", theme="dark", codec="auto", headless=True, log=print, from_wins=0):
+    """Replay a run with the full UI and write it to `video_path` (mp4). -> replay report (plus video info).
+    from_wins: fast-forward (no drawing, no video) until the run has that many wins, then record (e.g. 35: round 6)."""
     if headless:
         os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
         os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
@@ -486,6 +491,7 @@ def record_run(run_dir, rom, save, video_path, until_wins=FULL_WIN, game_speed=2
 
     def wrap(emu):
         holder["m"] = RecordingMachine(emu, viewer, writer, game_speed, fps)
+        holder["m"].active = from_wins <= 0
         return holder["m"]
 
     class _Choice:
@@ -493,6 +499,8 @@ def record_run(run_dir, rom, save, video_path, until_wins=FULL_WIN, game_speed=2
             self.action, self.reason, self.details = action, reason, details
 
     def on_decision(be, rec, action):
+        if not holder["m"].active:
+            return
         from pybattle.emu_backend import Phase as P
         phase = be.phase
         view, info = be.view(), be.run_info()
@@ -510,6 +518,11 @@ def record_run(run_dir, rom, save, video_path, until_wins=FULL_WIN, game_speed=2
         holder["m"].hold(hold)
 
     def on_battle_end(won, be):
+        if not holder["m"].active:
+            if be.wins >= from_wins:
+                holder["m"].active = True
+                viewer.add_log(f"=== recording from {be.wins} wins ===", "run")
+            return
         viewer.add_log("battle " + ("WON" if won else "LOST") + f" — run wins {be.wins}", "won" if won else "lost")
 
     viewer.set_run(1)
