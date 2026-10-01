@@ -69,6 +69,39 @@ public:
     Emulator& operator=(const Emulator&) = delete;
 
     void reset() { m_core->reset(m_core); }
+
+    // Rendering: frameskip n draws one frame in n + 1 (the picture is output only: emulation is identical).
+    // A large n is "headless, no rendering"; 0 draws every frame (the default, as before).
+    void setFrameskip(int n) {
+        m_frameskip = n < 0 ? 0 : n;
+        mCoreConfigSetIntValue(&m_core->config, "frameskip", m_frameskip);
+        m_core->reloadConfigOption(m_core, "frameskip", nullptr);
+    }
+    int frameskip() const { return m_frameskip; }
+
+    // The cartridge clock. Default: the host's wall clock (mGBA's default). fake_epoch(ms): a clock that starts
+    // at `ms` (Unix time in milliseconds) and advances with the emulated frames only, so a run is reproducible
+    // from a savestate whatever the host time (the frame counter is part of the state).
+    void setRtcFakeEpoch(int64_t ms) {
+        m_core->rtc.override = RTC_FAKE_EPOCH;
+        m_core->rtc.value = ms;
+    }
+    void setRtcWallclock() { m_core->rtc.override = RTC_NO_OVERRIDE; }
+
+    // The cartridge's save memory (flash). A savestate does not hold it (mGBA keeps it in the save file, here an
+    // in-memory copy), so an exact restart from a savestate also restores it.
+    py::bytes saveData() {
+        void* sram = nullptr;
+        size_t size = m_core->savedataClone(m_core, &sram);
+        std::string out(static_cast<const char*>(sram), size);
+        free(sram);
+        return py::bytes(out);
+    }
+
+    void loadSaveData(const std::string& data) {
+        if (!m_core->savedataRestore(m_core, data.data(), data.size(), true))
+            throw std::runtime_error("savedataRestore failed");
+    }
     void setKeys(uint32_t keys) { m_core->setKeys(m_core, keys); }
     uint32_t frame() const { return m_core->frameCounter(m_core); }
 
@@ -148,6 +181,7 @@ private:
     std::vector<color_t> m_video;
     std::vector<uint8_t> m_save;
     unsigned m_width = 0, m_height = 0;
+    int m_frameskip = 0;
 };
 
 }  // namespace
@@ -170,6 +204,12 @@ PYBIND11_MODULE(pybattle_emu, m) {
     py::class_<Emulator>(m, "Emulator")
         .def(py::init<const std::string&, const std::string&>(), py::arg("rom"), py::arg("save") = "")
         .def("reset", &Emulator::reset)
+        .def("set_frameskip", &Emulator::setFrameskip, py::arg("n"))
+        .def_property_readonly("frameskip", &Emulator::frameskip)
+        .def("set_rtc_fake_epoch", &Emulator::setRtcFakeEpoch, py::arg("ms"))
+        .def("set_rtc_wallclock", &Emulator::setRtcWallclock)
+        .def("save_data", &Emulator::saveData)
+        .def("load_save_data", &Emulator::loadSaveData, py::arg("data"))
         .def("set_keys", &Emulator::setKeys)
         .def_property_readonly("frame", &Emulator::frame)
         .def("run_frames", &Emulator::runFrames, py::arg("n") = 1)

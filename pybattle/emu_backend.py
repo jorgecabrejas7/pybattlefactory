@@ -99,13 +99,28 @@ def can_switch(ram, battler: int = 0) -> bool:
 
 
 class EmuBackend(FactoryBackend):
-    def __init__(self, rom: str = "", save: str = "", open_level: bool = True, machine=None, boot=None):
+    def __init__(self, rom: str = "", save: str = "", open_level: bool = True, machine=None, boot=None,
+                 options: Optional[dict] = None, frameskip: Optional[int] = None, rtc_epoch_ms: Optional[int] = None):
         """Headless (rom/save), or on an existing `machine` (the viewer's ViewedMachine, or a
         LuaMachine for mgba-qt). `boot` (default: only for a fresh headless emulator) loads the
-        save from the title screen; otherwise the game must already be in the Factory lobby."""
+        save from the title screen; otherwise the game must already be in the Factory lobby.
+
+        Speed / reproducibility (all optional; None keeps the emulator's behaviour as before):
+        options: the in-game OPTIONS set once the save is loaded (pybattle.emu.options.write_options kwargs, e.g.
+        {"text_speed": "fast", "battle_scene": False}); frameskip: draw one frame in frameskip + 1 (a large value
+        = no rendering when nobody watches; emulation is identical); rtc_epoch_ms: the cartridge clock starts there
+        and follows the emulated frames (reproducible from a savestate) instead of the host's wall clock."""
         self.d = FactoryDriver(rom, save, machine=machine)
+        emu = self.d.emu
+        if frameskip is not None and hasattr(emu, "set_frameskip"):
+            emu.set_frameskip(frameskip)
+        if rtc_epoch_ms is not None:
+            emu.set_rtc_fake_epoch(int(rtc_epoch_ms))
         if boot if boot is not None else machine is None:
             self.d.boot_to_overworld()
+        if options:
+            from .emu.options import write_options
+            write_options(emu, **options)
         self._lobby = self.d.save_state()
         self.open_level = open_level
         self.phase = Phase.RUN_OVER

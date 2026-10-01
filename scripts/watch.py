@@ -14,6 +14,13 @@ buttons along the bottom: Pause/Resume, Next (step mode: do the shown action), S
 - / +, Human on/off, text size A-/A+, Theme, Fullscreen, Quit. The keyboard plays the GBA only in
 human mode: arrows, Z = A, X = B, Enter = Start, Backspace = Select, A/S = L/R.
 Decisions are also written to watch_log.jsonl.
+
+alphazero_v3 on the real game (rl/real_agents.py, the agents of the evaluation, with every panel: probabilities,
+P(win), search visits / Q, the tactician's W / E_round / Q_plan / Δ and hint, the opponent model's beliefs):
+
+    python scripts/watch.py --rom ROM --save SAV --v3 search [--ckpt runs/alphazero_v3/latest.pt] [--speed 2]
+
+Fast headless runs, logs, savestates and the replay / video of a full win: scripts/play_real.py.
 """
 
 import argparse
@@ -28,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pybattle.backend import Phase  # noqa: E402
 from pybattle.emu.decode import SYMBOLS as S  # noqa: E402
 from pybattle.emu.driver import Decision  # noqa: E402
+from pybattle.emu.mirror import WatchedMachine  # noqa: E402
 from pybattle.emu.viewer import Scene, Viewer, ViewedMachine  # noqa: E402
 from pybattle.emu_backend import EmuBackend  # noqa: E402
 from pybattle.view import BattleObserver, BattleView  # noqa: E402
@@ -122,11 +130,21 @@ def main():
     ap.add_argument("--snapshot", default="", help="save the window to this PNG when stopping")
     ap.add_argument("--size", default="", help="window size WxH (default: fits the screen)")
     ap.add_argument("--theme", default="dark", choices=["dark", "light"])
+    ap.add_argument("--v3", choices=["net", "search"], default=None,
+                    help="alphazero_v3 (rl.real_agents): the network alone or the legal search (512, experience model)")
+    ap.add_argument("--ckpt", default="runs/alphazero_v3/latest.pt", help="--v3: the checkpoint")
+    ap.add_argument("--battle-scene", choices=["keep", "on", "off"], default="keep",
+                    help="in-game option Battle Scene (keep: as in the save); with on/off text speed is set to Fast")
     args = ap.parse_args()
 
+    if args.v3:
+        os.environ["PYB_MODE"], os.environ["PYB_CKPT"] = args.v3, args.ckpt
+        args.agents = "rl.real_agents:Tactician,rl.real_agents:Battler"
     tactician, battler = load_agents(args.agents)
     size = tuple(int(v) for v in args.size.lower().split("x")) if args.size else None
-    viewer = Viewer(speed=args.speed, step=args.step, human=args.human, size=size, theme=args.theme)
+    viewer = Viewer(speed=args.speed, step=args.step, human=args.human, size=size, theme=args.theme,
+                    beliefs_panel=bool(args.v3),
+                    mode_label={"net": "v3 network", "search": "v3 search 512"}.get(args.v3, ""))
     if args.seconds:
         viewer.deadline = time.time() + args.seconds
     log = open(args.log, "a")
@@ -134,8 +152,13 @@ def main():
     def game():
         """Runs in a worker thread; the window (main thread) stays responsive meanwhile."""
         viewer.set_status("booting the save…")
-        machine = ViewedMachine(args.rom, args.save, viewer)
-        backend = EmuBackend(machine=machine, boot=True, open_level=args.open_level)
+        # WatchedMachine: the battle start snapshot the search's simulator mirror needs (pybattle.emu.mirror)
+        machine = WatchedMachine(ViewedMachine(args.rom, args.save, viewer))
+        opts = None if args.battle_scene == "keep" else {"text_speed": "fast", "battle_scene": args.battle_scene == "on"}
+        backend = EmuBackend(machine=machine, boot=True, open_level=args.open_level, options=opts)
+        for agent in (tactician, battler):
+            if hasattr(agent, "bind"):
+                agent.bind(backend)
         run = 0
         while True:
             run += 1
