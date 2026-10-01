@@ -1479,7 +1479,10 @@ def main(argv=None):
     D = extract(paths, include_late=not a.no_late)
     R = analyze(D, B=a.boot, min_n=a.min_n)
     R["files"] = paths
-    title = a.title or f"Cómo juega el agente ({(R['meta'] or {}).get('battler', '?')})"
+    m = R["meta"] or {}
+    who = {"net": "red sola", "search": f"búsqueda legal {m.get('sims')}"}.get(m.get("battler"), m.get("battler", "?"))
+    src = {"sim": "réplica en el simulador", "emu": "juego real"}.get(m.get("source"), m.get("source", ""))
+    title = a.title or f"Cómo juega {os.path.basename(os.path.dirname(m.get('ckpt', '?/?')))}: {who} ({src})"
     path = write_report(R, D, a.out, title)
     print(path)
     return R

@@ -2147,3 +2147,42 @@ python -m pytest tests/python/test_playlog.py
 El *runner* del emulador crea un `PlayLogger` y en cada decisión llama a `PlayAgent.tactician` / `battler` (o a su
 propio agente) y a `logger.decision(...)`; `rl.playstats --logs <carpeta>` funciona igual sobre esos registros (las
 claves que falten en `extras` dejan vacías las métricas que las necesitan).
+
+### 23.6 Réplica en el simulador: muestra, velocidad y primeros resultados (2026-10-01)
+
+Con alphazero_v4 entrenando en la máquina (18 procesos), con `nice 10` y como mucho 3 procesos:
+
+| modo | rachas (tardías) | combates | decisiones | tiempo | combates / hora |
+|---|---|---|---|---|---|
+| red sola | 1.128 (300) | 22.057 | 264.493 | 25,6 min, 3 procesos | 51.650 |
+| búsqueda legal 512, «experience» | 978 (300) | 21.048 | 247.680 | 2,03 h, 2 + 1 procesos | ~10.350 (3.450 por proceso) |
+
+Registros en `runs/playstudy_v3/{net,search}/` (~3,7 kB por combate comprimido). Informes:
+`runs/playstudy_v3/report_net/report.md` y `runs/playstudy_v3/report_search/report.md` (más `stats.json` y
+`plots/`). El análisis tarda ~5 min por modo (un proceso).
+
+Lo principal (IC 95 % en los informes; R = ronda):
+- **Resultados**: victorias por combate, red / búsqueda: R1 98,2 / 98,6 %, R5 87,5 / 90,3 %, R6 91,0 / 91,7 %, Noland
+  79,8 / 81,5 %. Racha media desde la ronda 1: 22,2 / 25,4. En el 86 % de las derrotas hubo algún evento de mala
+  suerte (60 % en las victorias). La búsqueda coincide con el máximo de la red en el 97,8 % de las decisiones
+  (94,8 % contra Noland).
+- **Alquiler**: elige sets más fuertes que lo ofrecido (+11,7 de suma de base, más PS y aguante, menos movimientos de
+  estado) y legendarios casi siempre (Suicune, Snorlax, Regice, Metagross > 97 %); descarta Shuckle, Xatu, Misdreavus,
+  Raichu. Registeel nunca es líder. El líder no resiste más el tipo de la pista que el resto del equipo, pero sí lo
+  golpea x2 más (+6,7 puntos). Busca barredores con mejora (lift 1,35) y evita equipos de apoyo (0,85).
+- **Cobertura**: lo elegido supera a ~55–66 % de las opciones (mejor que al azar, lejos de la mejor); lo que más
+  busca es aguante (percentil 0,65); al cambiar en las rondas 5–6 sube sobre todo el aguante especial.
+- **Cambios**: cambia el 72 % de las veces en R1 y el 34 % en R6; coincide con el máximo de Q_plan en el 67 %; casi
+  nunca se queda cuando el planificador dice cambiar (0,1 %) pero sí cuando las estadísticas base lo dicen (45 %).
+  Cambiar frente a quedarse en estados comparables: sin diferencia en el combate siguiente (+0,2 puntos [−0,4, 0,8]).
+- **Sinergias**: evita el sol (lift 0,47) y busca parejas defensivas (1,38); casi no usa las que tiene: Danza Lluvia
+  en el 2 % de los combates en que la tiene, Relevo **nunca** (764 decisiones con Relevo disponible).
+- **Pista y rasgos**: la pista, solo en la entrada de la red, cambia la elección en ~2 % de los casos; con W y el
+  planificador recalculados, en el 21 % (alquiler) y 13 % (cambio). Con los rasgos a cero cambia el 95 % / 75 %: el
+  táctico depende sobre todo de W / planificador.
+- **Estados**: los usa ~20 % de las veces que puede, casi siempre con el rival entero; errores por lo visible del
+  17–26 % (Tóxico a un rival ya con estado o de tipo veneno / acero, Drenadoras a uno ya plantado o de tipo planta),
+  Fuego Fatuo solo 7 %.
+- **Movimientos**: mejor eficacia en el 92 %, máximo daño en el 74 %, toma el KO seguro en el 81 %; evita el contacto
+  contra habilidades que lo castigan (−17 puntos). **Cambios en combate**: cambia +10 puntos más en desventaja de
+  tipos y el que entra resiste mejor que la alternativa en el 87 %; amenazado de KO, se queda y cae el 20 %.
