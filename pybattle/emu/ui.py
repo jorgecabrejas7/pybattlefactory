@@ -683,6 +683,10 @@ def draw_decision(p: Painter, x, y, w, scene, waiting: bool) -> float:
     right, rc = ("waiting for Next", t["accent"]) if waiting else ("", None)
     if scene.choice is None:
         right, rc = "thinking…", t["muted"]
+    if scene.choice is not None and d.get("tactician_options") is not None:
+        return _tactician_decision(p, x, y, w, scene, right, rc)
+    if scene.choice is not None and d.get("kind") == "battle" and "net_action" in d:
+        return _battler_decision(p, x, y, w, scene, right, rc)
     y = p.section(title, x, y, w, right, rc)
     if scene.choice is None:
         return y
@@ -793,6 +797,217 @@ def _action_bars(p: Painter, x, y, w, actions, chosen) -> float:
     if hidden:
         p.text(f"+ {hidden} more under 1%", x + 6, y, p.small, t["faint"])
         y += p.small.get_linesize()
+    return y
+
+
+# ---- alphazero_v3 on the real game (rl/real_agents.py): battler, tactician and opponent-model panels ------------
+
+def _row_bg(p: Painter, x, y, w, h, chosen: bool):
+    if chosen:
+        p.rect(p.t["chosen_bg"], (x - 4, y, w + 8, h - 2), radius=4)
+        p.rect(p.t["chosen"], (x - 4, y, 4, h - 2), radius=2)
+
+
+def _cols(x, w, spec):
+    """spec: [(key, fraction of w)] -> {key: (x0, width)}; fractions are normalized."""
+    tot = sum(f for _, f in spec)
+    out, cx = {}, x
+    for k, f in spec:
+        cw = w * f / tot
+        out[k] = (cx, cw)
+        cx += cw
+    return out
+
+
+def _bar_cell(p: Painter, cx, cy, cw, frac, text, color, is_c):
+    tw = p.small_b.size("100%")[0]
+    bh = max(5, round(p.u * 0.5))
+    bw = cw - tw - p.gap * 2
+    if bw > p.u:
+        p.bar(cx, cy - bh / 2, bw, bh, frac, color)
+    p.text(text, cx + cw - p.gap, cy, p.small_b, p.t["text"] if is_c else p.t["muted"], align="right", valign="center")
+
+
+def _battler_decision(p: Painter, x, y, w, scene, right, rc) -> float:
+    t, d = p.t, scene.details
+    s = d.get("search")
+    mode = d.get("mode", "net")
+    if s is not None:
+        title = f"Battler — search ({int(sum(s['visits']))} visits)"
+    elif mode == "search":
+        title = "Battler — network (search off: " + (d.get("search_fallback") or "one option") + ")"
+    else:
+        title = "Battler — network alone"
+    right = right or (f"{d['ms']:.0f} ms" if d.get("ms") is not None else "")
+    y = p.section(title, x, y, w, right, rc)
+    y = _gauge(p, x, y, w, "P(win this battle) — network", d["p_win"], pct(d["p_win"]))
+    if s is not None:
+        q = s.get("q_chosen", 0.0)
+        p.text(f"search: Q of the chosen action {q:.2f} (mean result of its simulations, 1 = win)", x, y, p.small,
+               t["muted"], max_w=w)
+        y += p.small.get_linesize() + p.gap
+    acts = d.get("actions") or []
+    chosen = d.get("chosen")
+    if not acts:
+        return p.paragraph(scene.choice.reason or "no choice", x, y, w, p.small, t["muted"])
+    has_s = s is not None
+    spec = [("label", 3.2), ("net", 2.4)] + ([("visits", 2.4), ("q", 0.9)] if has_s else []) + [("dmg", 1.9)]
+    cols = _cols(x, w, spec)
+    heads = {"label": "action", "net": "network π", "visits": "search visits", "q": "Q", "dmg": "damage / risk"}
+    for k, (cx, cw) in cols.items():
+        al = "left" if k in ("label", "net", "visits") else "right"
+        p.text(heads[k], cx if al == "left" else cx + cw - p.gap, y, p.tiny, t["muted"], align=al, max_w=cw)
+    y += p.tiny.get_linesize() + 2
+    tot = max(sum(a.get("visits", 0) for a in acts), 1.0)
+    rh = p.body.get_linesize() + max(4, round(p.u * 0.4))
+    for n, a in enumerate(acts):
+        is_c = n == chosen
+        _row_bg(p, x, y, w, rh, is_c)
+        cy = y + (rh - 2) / 2
+        lx, lw = cols["label"]
+        tx = lx + 6
+        if a.get("move"):
+            sw = max(3, round(p.u * 0.22))
+            p.rect(TYPE_COLORS[move_type(a["move"])], (tx, y + 3, sw, rh - 8), radius=2)
+            tx += sw + p.gap
+        p.text(a["label"], tx, cy, p.strong if is_c else p.body, t["text"], max_w=lx + lw - tx - p.gap,
+               valign="center")
+        cx, cw = cols["net"]
+        _bar_cell(p, cx, cy, cw, a.get("p", 0.0), pct(a.get("p", 0.0)),
+                  t["chosen"] if (is_c and not has_s) else t["info"], is_c)
+        if has_s:
+            cx, cw = cols["visits"]
+            v = a.get("visits", 0.0) / tot
+            _bar_cell(p, cx, cy, cw, v, pct(v), t["chosen"] if is_c else t["good"], is_c)
+            cx, cw = cols["q"]
+            p.text(f"{a.get('q', 0.0):.2f}", cx + cw - p.gap, cy, p.small_b, t["text"], align="right", valign="center")
+        cx, cw = cols["dmg"]
+        dmg, thr = a.get("damage"), a.get("threat")
+        ex = cx + cw
+        if dmg is not None and dmg[1] > 0:
+            if dmg[2]:
+                ex -= p.chip("KO", ex - p.chip_w("KO"), cy - p.chip_h() / 2, t["bad"], (255, 255, 255)) + p.gap // 2
+            p.text(f"{min(dmg[0], 1):.0%}–{min(dmg[1], 1):.0%}", ex, cy, p.small_b,
+                   t["good"] if dmg[1] >= 0.5 else t["text"], align="right", valign="center", max_w=ex - cx)
+        elif thr is not None and thr[0] > 0:
+            if thr[1]:
+                ex -= p.chip("KO risk", ex - p.chip_w("KO risk"), cy - p.chip_h() / 2, t["bad"],
+                             (255, 255, 255)) + p.gap // 2
+            p.text(f"takes ≤{min(thr[0], 1):.0%}", ex, cy, p.small, t["muted"], align="right", valign="center",
+                   max_w=ex - cx)
+        y += rh
+    return y + p.gap
+
+
+def _tactician_decision(p: Painter, x, y, w, scene, right, rc) -> float:
+    t, d = p.t, scene.details
+    kind = d.get("kind")
+    rows = d.get("tactician_options") or []
+    title = "Tactician — rental (lead + 2)" if kind == "rental" else "Tactician — swap after the win"
+    y = p.section(title, x, y, w, right or d.get("hint", ""), rc or t["info"])
+    ew = d.get("expected_wins")
+    if ew is not None:
+        val = f"≈ {ew:.1f}"
+        vw = p.text(val, x + w, y, p.big, t["info"], align="right")
+        lh = p.big.get_linesize()
+        p.text("Expected wins ahead", x, y + (lh - p.body.get_linesize()) / 2, p.medium, t["text"],
+               max_w=w - vw - p.gap)
+        y += lh
+        if d.get("critic") is not None:
+            p.text(f"= critic {d['critic']:+.1f} + Φ {d.get('phi', 0):.1f} (planner's value of this state)", x, y,
+                   p.small, t["muted"], max_w=w)
+            y += p.small.get_linesize() + p.gap
+    chosen = d.get("chosen_option")
+    order = sorted(range(len(rows)), key=lambda n: -rows[n]["p"])
+    if kind == "rental":
+        keep = order[:8]
+        if chosen is not None and chosen not in keep:
+            keep.append(chosen)
+        best = d.get("best_q_plan")
+        if best is not None and best not in keep:
+            keep.append(best)
+    else:
+        keep = order
+    has_f = any("q_plan" in r for r in rows)
+    spec = [("label", 4.0), ("p", 2.0)] + ([("e", 0.9), ("w", 1.4), ("q", 1.1), ("dl", 0.9)] if has_f else [])
+    cols = _cols(x, w, spec)
+    heads = {"label": "team" if kind == "rental" else "option", "p": "policy π", "e": "E_rd", "w": "W n / last",
+             "q": "Q_plan", "dl": "Δ"}
+    for k, (cx, cw) in cols.items():
+        al = "left" if k in ("label", "p") else "right"
+        p.text(heads[k], cx if al == "left" else cx + cw - p.gap, y, p.tiny, t["muted"], align=al, max_w=cw)
+    y += p.tiny.get_linesize() + 2
+    rh = p.body.get_linesize() + max(3, round(p.u * 0.3))
+    best = d.get("best_q_plan")
+    for n in keep:
+        r = rows[n]
+        is_c = n == chosen
+        _row_bg(p, x, y, w, rh, is_c)
+        cy = y + (rh - 2) / 2
+        lx, lw = cols["label"]
+        star = "★ " if n == best else ""
+        p.text(star + r["label"], lx + 6, cy, p.strong if is_c else p.small, t["text"], max_w=lw - 8, valign="center")
+        cx, cw = cols["p"]
+        _bar_cell(p, cx, cy, cw, r["p"], pct(r["p"]), t["chosen"] if is_c else t["info"], is_c)
+        if has_f and "q_plan" in r:
+            for k, txt in (("e", f"{r['e_round']:.2f}"), ("w", f"{r['w_normal']:.2f} / {r['w_last']:.2f}"),
+                           ("q", f"{r['q_plan']:.2f}"), ("dl", f"{r['delta']:+.2f}")):
+                cx, cw = cols[k]
+                col = t["good"] if (k == "q" and n == best) else t["text"]
+                p.text(txt, cx + cw - p.gap, cy, p.small_b if k == "q" else p.small, col, align="right",
+                       valign="center", max_w=cw)
+        y += rh
+    if kind == "rental" and len(rows) > len(keep):
+        p.text(f"top {len(keep)} of {len(rows)} teams by π · ★ = best Q_plan (planner: wins expected with the next "
+               f"swaps planned)", x + 6, y, p.tiny, t["faint"], max_w=w)
+        y += p.tiny.get_linesize()
+    elif has_f:
+        p.text("★ = best Q_plan · W = P(win a battle): normal / last or Noland · E_rd = wins expected this round · "
+               "Δ = W change", x + 6, y, p.tiny, t["faint"], max_w=w)
+        y += p.tiny.get_linesize()
+    return y + p.gap
+
+
+def draw_beliefs(p: Painter, x, y, w, scene) -> float:
+    """The opponent model: for each opposing Pokemon, its most likely sets given what has been revealed."""
+    t = p.t
+    d = scene.details if scene is not None else None
+    bel = (d or {}).get("beliefs")
+    y = p.section("Opponent model — what the search believes", x, y, w, "learned from own games")
+    if not bel:
+        return p.paragraph("shown at battle decisions (alphazero_v3 with the experience model)", x, y, w, p.small,
+                           t["faint"])
+    lh = p.small.get_linesize()
+    for b in bel:
+        if b["fainted"]:
+            p.text(f"{nm('species', b['species'])}: fainted", x, y, p.small_b, t["faint"], max_w=w)
+            y += lh
+            continue
+        if b["seen"]:
+            head = nm("species", b["species"])
+            known = [nm("moves", m) for m in b["revealed_moves"]]
+            if b["revealed_item"]:
+                known.append("@" + nm("items", b["revealed_item"]))
+            sub = ("seen: " + ", ".join(known)) if known else "nothing revealed yet"
+        else:
+            head = f"slot {b['slot'] + 1}: not seen"
+            sub = "likely: " + ", ".join(f"{nm('species', s['species'])} {pct(s['p'])}"
+                                          for s in (b.get("species_probs") or [])[:3])
+        hw = p.text(head, x, y, p.small_b, t["text"], max_w=w * 0.45)
+        p.text(sub, x + hw + p.gap * 2, y, p.small, t["muted"], max_w=w - hw - p.gap * 2)
+        y += lh
+        for s in b["sets"]:
+            moves = " · ".join(nm("moves", m) for m in s["moves"] if m)
+            item = nm("items", s["item"]) if s["item"] else "no item"
+            pre = "" if b["seen"] else nm("species", s["species"]) + " "
+            pw = p.text(pct(s["p"]), x + p.u, y, p.small_b, t["info"])
+            p.text(f"{pre}@{item}: {moves}", x + p.u + max(pw, p.small_b.size('100%')[0]) + p.gap, y, p.small,
+                   t["text"], max_w=w - p.u * 4)
+            y += lh
+        if b.get("p_new", 0) >= 0.005:
+            p.text(f"{pct(b['p_new'])} a set never seen", x + p.u, y, p.small, t["faint"], max_w=w)
+            y += lh
+        y += p.gap // 2
     return y
 
 

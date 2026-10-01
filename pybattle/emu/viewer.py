@@ -73,7 +73,9 @@ class Viewer:
     deadline = 0.0
 
     def __init__(self, speed: int = 1, step: bool = False, human: bool = False, size: Tuple[int, int] = None,
-                 theme: str = "dark"):
+                 theme: str = "dark", beliefs_panel: bool = False, mode_label: str = ""):
+        """beliefs_panel: a panel under the game for the opponent model's beliefs (agents that give
+        details["beliefs"], rl/real_agents.py); mode_label: shown in the header (e.g. "search 512")."""
         pygame.init()
         pygame.display.set_caption("pybattlefactory — Battle Factory")
         if size is None:
@@ -118,6 +120,9 @@ class Viewer:
         self._cache: Dict[str, Tuple[Any, pygame.Surface]] = {}
         self._layout_key = None
         self.error: Optional[BaseException] = None
+        self.beliefs_panel = beliefs_panel
+        self.mode_label = mode_label
+        self.r_beliefs = None
         self.relayout()
 
     # --- content (called from the game thread) --------------------------------------------------------------
@@ -248,7 +253,14 @@ class Viewer:
             gw = min((W - 3 * pad) * 0.46, (avail_h - log_min - pad) * 1.5)
             gw, gh = self._game_size(gw)
             self.r_game = pygame.Rect(pad, top + pad, gw, gh)
-            self.r_log = pygame.Rect(pad, self.r_game.bottom + pad, gw, bottom - pad - self.r_game.bottom - pad)
+            rest = bottom - pad - self.r_game.bottom - pad
+            self.r_beliefs = None
+            if self.beliefs_panel:
+                bh = round(rest * 0.66)
+                self.r_beliefs = pygame.Rect(pad, self.r_game.bottom + pad, gw, bh)
+                self.r_log = pygame.Rect(pad, self.r_beliefs.bottom + pad, gw, rest - bh - pad)
+            else:
+                self.r_log = pygame.Rect(pad, self.r_game.bottom + pad, gw, rest)
             self.r_right = pygame.Rect(self.r_game.right + pad, top + pad, W - self.r_game.right - 2 * pad, avail_h)
         else:                                          # portrait: game on top, panels, log at the bottom
             gw = min(W - 2 * pad, avail_h * 0.36 * 1.5)
@@ -443,6 +455,8 @@ class Viewer:
         s.blit(self._cached("right", (self._scene_ver, self.waiting, self._layout_key), self._render_right),
                self.r_right)
         s.blit(self._cached("log", (self._log_ver, self.log_scroll, self._layout_key), self._render_log), self.r_log)
+        if self.r_beliefs is not None:
+            s.blit(self._cached("beliefs", (self._scene_ver, self._layout_key), self._render_beliefs), self.r_beliefs)
         self._draw_game()
         self._draw_bar()
         pygame.display.flip()
@@ -498,6 +512,8 @@ class Viewer:
             chips.append(("STEP · press Next" if self.waiting else "STEP", t["accent"], t["on_accent"]))
         else:
             chips.append(("AGENTS", t["good"], (15, 15, 15)))
+        if self.mode_label:
+            chips.append((self.mode_label, t["info"], (255, 255, 255)))
         chips.append((("speed max" if self.speed == 0 else f"speed {self.speed}×"), t["card_hi"], t["text"]))
         if self.paused:
             chips.append(("PAUSED", t["bad"], (255, 255, 255)))
@@ -571,6 +587,23 @@ class Viewer:
                     y_dec = 0
                 p.rect(t["panel"], (0, y_dec, W, H - y_dec))
                 ui.draw_decision(p, p.pad, y_dec + p.pad, inner, sc, self.waiting)
+                break
+        return surf
+
+    def _render_beliefs(self) -> pygame.Surface:
+        """The opponent model's panel; keeps the last battle scene's beliefs while the tactician decides."""
+        t = ui.THEMES[self.theme]
+        W, H = self.r_beliefs.size
+        surf = pygame.Surface((max(1, W), max(1, H)))
+        sc = self.scene
+        if sc is not None and (sc.details or {}).get("beliefs"):
+            self._belief_scene = sc
+        sc = getattr(self, "_belief_scene", None)
+        for shrink in (1.0, 0.9, 0.8, 0.72, 0.65, 0.58):
+            surf.fill(t["panel"])
+            p = self._painter(surf, max(8.0, self.u * shrink))
+            h = ui.draw_beliefs(p, p.pad, p.pad, W - 2 * p.pad, sc)
+            if h <= H:
                 break
         return surf
 
