@@ -176,7 +176,7 @@ def _recorded(out):
 
 
 def cmd_status(a):
-    tot = {"battles": 0, "runs": 0, "seconds": 0.0, "full_wins": 0}
+    tot = {"battles": 0, "runs": 0, "seconds": 0.0, "full_wins": 0, "battles_per_hour": 0.0}
     print(f"{'worker':7s} {'mode':7s} {'runs':>6s} {'battles':>8s} {'win%':>6s} {'bat/h':>7s} {'best':>5s} "
           f"{'full':>5s} {'ms/battler':>10s}  current")
     for sp in sorted(glob.glob(os.path.join(a.out, "w*", "stats.json"))):
@@ -198,7 +198,7 @@ def cmd_status(a):
         for k in tot:
             tot[k] += s.get(k, 0)
     print(f"total: {tot['runs']} runs, {tot['battles']} battles, {tot['full_wins']} full wins, "
-          f"{tot['battles'] / max(tot['seconds'], 1) * 3600 * max(1, len(glob.glob(os.path.join(a.out, 'w*', 'stats.json')))):.0f} battles/h (all workers)")
+          f"{tot['battles_per_hour']:.0f} battles/h (sum over workers; counted at the end of each run)")
     for w in _full_wins(a.out):
         print("FULL WIN:", w["run"], "worker", w["worker"], w["mode"], w["dir"])
     p = os.path.join(a.out, "recorded.jsonl")
