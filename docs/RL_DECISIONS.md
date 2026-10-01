@@ -1905,3 +1905,245 @@ Con información perfecta y la red de v3, el combatiente gana ~94 % de los comba
 reto de forma consistente **no es alcanzable con la red actual ni conociendo al rival**; hace falta una red (valor y
 política) mucho mejor, que suba el techo, o equipos mejores. alphazero_v4 (modelo del rival aprendido de la experiencia,
 1500 iteraciones, desde cero) se lanzó igualmente, como decidió el usuario.
+
+## 23. Estudio de cómo juega el mejor agente de v3 (`rl/playlog.py`, `rl/play_agent.py`, `rl/play_sim.py`, `rl/playstats.py`, 2026-10-01)
+
+Objetivo (decidido por el usuario): describir **cómo** juega `runs/alphazero_v3/latest.pt` (táctico con sus rasgos W /
+planificador; combatiente = la red sola **y** la búsqueda legal de 512 con el modelo del rival «experience»), por ronda
+(1–6, Noland aparte) y a lo largo de la racha. Hay dos fuentes de partidas con el **mismo** registro: el juego real
+(emulador; el *runner* lo escribe otro agente y llama a este registrador) y una réplica en el simulador (muchos más
+combates). Es solo diagnóstico: nada de esto entra en el entrenamiento.
+
+### 23.1 El registrador (`rl/playlog.py`)
+
+Definiciones:
+- **Registro** (*log*): un archivo de texto con un objeto JSON por línea (JSONL); comprimido con gzip si el nombre acaba
+  en `.gz`. Cada línea es un **registro** de uno de cuatro tipos: `meta` (la primera: configuración), `decision`,
+  `battle_end` y `run_end`.
+- **Vista del jugador**: lo que el juego enseña (`RentalView`, `SwapView`, `BattleView` de `pybattle/view.py`). **Verdad**:
+  lo que el jugador no ve (equipo verdadero del rival, sus PS exactos...).
+
+Interfaz (fija; el *runner* del emulador programa contra ella):
+
+```
+class PlayLogger:
+    def __init__(self, path, meta: dict)
+    def decision(self, kind: str, view, run_info, policy: dict, action, extras: dict) -> None
+        # kind: rental | swap | battle | forced_switch; view = la vista del jugador (RentalView/SwapView/BattleView);
+        # policy: {"probs": [...], "value": float, "legal": [...]} (+ claves extra); extras: cualquier cosa
+    def battle_end(self, won: bool, info: dict) -> None
+    def run_end(self, streak: int, info: dict) -> None
+    def close(self) -> None
+read_log(path) -> registros (dicts);  iter_runs(paths) -> rachas agrupadas (combates -> decisiones)
+```
+
+- Se llama a `decision` **antes** de dar la acción al juego. La acción se guarda como lista JSON: alquiler
+  `[líder, j, k]`, cambio `null` (quedarse) o `[hueco propio, hueco rival]`, combate `["move", i]` / `["switch", i]`.
+- **Serialización**: dataclasses → objetos, numpy → listas, conjuntos → listas ordenadas, tuplas → listas, NaN / ∞ →
+  `null`; lo que no se puede convertir queda como `{"__repr__": ...}`.
+- **Separación de la verdad**: la clave `"truth"` de `extras` (decisión) o de `info` (fin de combate / de racha) se
+  saca a un campo propio `"truth"` del registro. Todo lo demás es vista del jugador. La línea `meta` lo declara
+  (`player_view_fields`, `truth_fields`); `strip_truth(registro)` lo quita. Los análisis que describen al jugador no
+  leen `truth` (solo la sección marcada del informe).
+- Contadores propios: `run` (racha dentro del archivo; sube tras cada `run_end`) y `battle` (combate de la racha; sube
+  tras cada `battle_end`). Una decisión del táctico lleva el número del combate que precede.
+- Se vacía el búfer cada 200 registros: un proceso cortado conserva lo escrito; `read_log` lee hasta el corte y
+  `iter_runs` descarta la racha incompleta del final.
+
+### 23.2 El agente con sondas (`rl/play_agent.py`)
+
+`PlayAgent(ckpt, battler="net" | "search")`: `tactician(backend, kind, obs, ctx)` y `battler(backend, obs, ctx,
+decisiones)` devuelven `(acción, policy, extras)` listos para `decision`. Juegan **exactamente** como en la evaluación
+(`rl.eval_rounds`):
+- **Táctico**: su red, voraz (alquiler: el líder de mayor probabilidad y luego la pareja de mayor probabilidad dado ese
+  líder), con los 7 rasgos por opción de W y del planificador de profundidad 1 (`features_hook` del checkpoint: su W
+  `team_eval_0580.pt`, su tabla V_siguiente y `planner_cfg`).
+- **Semilla del planificador por decisión** (`planner_seed`): el planificador sortea rivales; con una semilla por
+  decisión las sondas de abajo ven los **mismos** sorteos (números aleatorios comunes) y su diferencia no es ruido del
+  sorteo. El juego del agente no cambia en distribución (los sorteos siguen siendo nuevos en cada decisión).
+- **Combatiente**: la red sola (máximo de su política) o la búsqueda legal (`SearchBattler`, 512 simulaciones, 8
+  determinizaciones, muestreador «experience» con `runs/opp_model_v3/model.pt`, §22).
+
+Qué se registra en cada decisión (además de la vista):
+- `policy`: probabilidades de la red sobre las opciones legales (`legal`, en el orden de `probs`), valor (del crítico;
+  en el combatiente, probabilidad de ganar), `choice` (índice elegido). Alquiler: además `lead_probs` (6) y
+  `trio_probs` (20 tríos).
+- Táctico, `extras`: `options`, `features` (los 7 rasgos por opción: E_ronda, W(normal | pista), W(último o Noland), Δ,
+  Q_plan, Q_plan − media, Φ; los de victorias divididos por 10), `q_plan` (en victorias), `hint`, `noland`,
+  `planner_seed` y `probes`.
+- **Sondas contrafactuales** (`probes`; solo la red, no se juegan): la elección y las probabilidades de la red con la
+  entrada cambiada:
+  - `hint_none_input`: la pista de la entrada se cambia por «ninguna» (tipo 18, estilo 0), rasgos sin tocar;
+  - `hint_none_full`: además los rasgos se recalculan sin pista (W con el símbolo «desconocida», planificador sin
+    rechazo por pista), con la misma semilla del planificador;
+  - `hint_<t>_input` / `hint_<t>_full`: el tipo de la pista se cambia por t, para 3 tipos t al azar entre los otros 16
+    reales (no el verdadero, no el tipo «misterio»); el estilo se mantiene;
+  - `feat_zero`: los rasgos por opción a cero.
+  Antes de Noland no hay pista: solo `feat_zero`. Con pista (18, 0) no hay `hint_none_*`.
+- Combatiente, `extras`: `estimates` (de `rl/damage.py`, lo que calcula un jugador: por movimiento del activo
+  [daño mínimo, máximo, ¿puede dejar KO?] en fracción de los PS máximos del rival; `max_damage_move`; amenazas de los
+  movimientos vistos del rival; quién es más rápido), `search` (visitas y Q por acción, si hay búsqueda) y `beliefs`
+  (las 3 configuraciones más probables del rival activo según el modelo «experience», con P(nueva)).
+
+### 23.3 La réplica en el simulador (`rl/play_sim.py`)
+
+- **Racha** i: semilla `stable_seed("play_sim", semilla, ronda de salida, i)`; las mismas rachas para los dos modos
+  (comparación emparejada). Empieza en el alquiler de la ronda 1, como el juego real, y termina con la primera derrota
+  (o un combate que llega a 300 decisiones: derrota marcada `truncated`; o `--max-battles` = 200 combates: `capped`).
+- **Rachas tardías** (`--late-runs`): empiezan en la ronda 5 o 6 (contador de alquileres al azar, como `FactoryEnv`),
+  marcadas `late_start`; solo añaden muestras de las rondas altas.
+- Además de lo del agente se registra: en cada decisión de combate los **eventos** desde nuestra decisión anterior
+  (`events_prev`: el análisis de mensajes del juego de `rl/autopsy.py`: críticos, fallos, estados, retrocesos...); en
+  cada fin de combate turnos, decisiones, PS que nos quedan (`own_hp`, nuestros: el jugador los ve), recuento de
+  eventos y balance de suerte; y como **verdad** el equipo verdadero del rival (fin de combate) y los PS / set
+  verdaderos de su activo (cada decisión).
+- Procesos: cada uno escribe su archivo `<out>/<modo>/<modo>_p<j>[sufijo].jsonl.gz`; las rachas se reparten en turno
+  rotatorio. `--run-offset` permite un segundo lanzamiento en la misma carpeta con otras rachas.
+
+### 23.4 Las métricas (`rl/playknow.py`, `rl/playstats.py`)
+
+**Convenciones.**
+- **Ronda** de un combate = `challenge_num + 1`; columnas R1..R6, **R7+** (rondas 7 y siguientes) y **Noland** (los
+  combates contra el Jefe, aparte). Una decisión del táctico pertenece al combate que precede. **Posición** = 1..7 dentro
+  de la ronda.
+- **Intervalo de confianza (IC) al 95 %**: *bootstrap* por rachas: 1.000 réplicas en las que cada racha recibe un peso
+  aleatorio Poisson(1) (todas sus decisiones con el mismo peso, porque dentro de una racha no son independientes); se
+  toman los percentiles 2,5 y 97,5 de la media ponderada.
+- **Diferencia controlada** por un estrato s (normalmente la ronda): Σ_s w_s (media del grupo A en s − media del grupo B
+  en s), w_s = observaciones de s / las de todos los estratos con los dos grupos. Es una asociación, no un efecto
+  causal (el agente elige cuándo hace cada cosa).
+- **Categoría** de un movimiento (3.ª generación): la da su tipo: normal, lucha, volador, veneno, tierra, roca, bicho,
+  fantasma y acero son **físicos**; fuego, agua, planta, eléctrico, psíquico, hielo, dragón y siniestro **especiales**.
+- **Ataque con tipo**: movimiento con potencia > 0 cuyo daño sigue la tabla de tipos (no cuentan Sísmico, Tinieblas,
+  Furia Dragón, Bomba Sónica, Psicoonda, Superdiente, Esfuerzo, Contraataque, Manto Espejo, golpes de KO directo,
+  Venganza). Poder Oculto toma su tipo de los IV (los nuestros se ven); Meteorobola, normal.
+- **Eficacia** de un tipo sobre un Pokémon: producto de la tabla de tipos por sus tipos, con la habilidad si el
+  jugador la conoce (anunciada, o la única posible de la especie): Levitación (tierra ×0), Absorbe Agua, Absorbe Elec.,
+  Absorbe Fuego, Superguarda (no súper eficaz ×0), Sebo (fuego / hielo ×0,5). **Resiste** = ×0,5 o menos (inmunidad
+  incluida); **débil** = ×2 o más.
+- Un **mon** del análisis: nuestro (o un alquiler) con el set completo; un rival de la pantalla de cambio, solo con los
+  movimientos que usó en combate (lo que ve el jugador).
+
+**A. Alquiler.**
+- **Opción** = (líder, pareja): 60. **Trío** = equipo sin orden: 20. P(trío) = Σ de P(opción) de sus 3 líderes.
+  **P(en el equipo)** de un Pokémon ofrecido = Σ P(trío) de los 10 tríos que lo contienen.
+- **Tasa de elección** de una especie = elegida / ofrecida; **probabilidad media** = media de P(en el equipo) al
+  ofrecerse; **seguridad** = media de |2·P(en el equipo) − 1| (1 = siempre clara; 0 = duda).
+- **Líder**: tasa de líder si elegido; especies elegidas ≥ 20 veces que nunca son líder. **Líder frente a la pista**
+  (alquileres con tipo en la pista): fracción de líderes que resisten el tipo de la pista frente a la media de los 3
+  elegidos; igual con «tiene un ataque con tipo súper eficaz contra ese tipo». Velocidad base del líder − media del
+  equipo.
+- **Elegidos frente a ofrecidos**: media de los 3 elegidos − media de los 6 ofrecidos de: suma de estadísticas base,
+  cada base, Velocidad real, **aguante físico real** = PS máx. × Def / 1000 (especial: × DefEsp), movimientos de estado
+  (potencia 0), ataques con tipo. **Objetos**: tasa de elección por objeto.
+- **Papel** de un set (el primero que se cumple): **barredor con mejora** = un movimiento que sube Ataque, At.
+  Especial o Velocidad (efectos ATTACK_UP(_2), SPEED_UP(_2), SPECIAL_ATTACK_UP(_2), CALM_MIND, DRAGON_DANCE, BULK_UP,
+  CURSE, BELLY_DRUM) y ≥ 2 ataques con tipo; **apoyo / estados** = ≥ 2 movimientos de estado; **barredor rápido** =
+  Velocidad base ≥ 90; **muro / tanque** = PS + (Def + DefEsp)/2 base ≥ 170 y máx(Atq, AtEsp) base < 100; **atacante
+  lento / robusto** = el resto. **Lift** de un papel = fracción entre los elegidos / fracción entre los ofrecidos.
+
+**B. Cambios.**
+- Opciones: quedarse + 3×3 cambios (el que entra ocupa el hueco del que sale). **Tasa de cambio** = cambia / decisiones;
+  **tasa de salida** de una especie = sale / estaba en el equipo en una pantalla de cambio; **tasa de entrada** = entra /
+  se ofrece. **Permanencia** = combates que un set (especie, movimientos, objeto) pasa en el equipo; *censurada* si la
+  racha acaba con él. **Tipo de cambio por papel**: (papel del que sale → papel del que entra, éste con su set completo,
+  visto en el combate siguiente).
+- **Cobertura defensiva** de un equipo, sobre los 17 tipos de ataque: **resistidos** (algún miembro resiste), **nadie
+  resiste** (17 − resistidos), **debilidades compartidas** (≥ 2 miembros débiles); también solo físicos (9 tipos) y
+  solo especiales (8). **Cobertura ofensiva**: de los 17 tipos simples, cuántos golpea ×2 algún ataque con tipo del
+  equipo; también solo con físicos y solo con especiales. **Aguante físico / especial** base = media de PS × Def (o
+  DefEsp) base / 1000.
+- Para cada decisión (alquiler: los 20 tríos; cambio: las 10 opciones, el rival visto como en la pantalla) se da la
+  medida de lo **elegido**, la **media de las opciones**, la **mejor opción** y el **percentil** = fracción de las otras
+  opciones a las que supera lo elegido (empates medio punto; 0,5 = al azar). **Antes / después** de cada cambio:
+  después − antes, con el que entra con su set completo.
+- **Fracción física** = ataques físicos / ataques con tipo del equipo. **Encaje** de un miembro = fracción de sus ataques
+  con tipo cuya categoría coincide con su mayor ataque base (Atq ≥ AtEsp → físicos); el del equipo, la media;
+  **desajustados** = miembros con encaje < 0,5.
+- **Arquetipo** (medias de base): **rápido y frágil** = Velocidad ≥ 85 y PS·(Def + DefEsp)/2 < 7.500; **lento y robusto**
+  = Velocidad < 70 y ese producto ≥ 7.500; **mixto**, el resto. **Supera con seguridad** a un rival = Velocidad real >
+  la máxima posible del rival (IV 31, EV 252, naturaleza +, nivel 100); **fracción superada** de un miembro = fracción
+  de los rivales vistos en esa ronda en los registros (ponderados por frecuencia) a los que supera con seguridad.
+  **Correlaciones** de Spearman entre velocidad, aguantes, ataque y PS medios de los equipos de cada combate.
+- **No cambia aunque otra opción parezca mejor**: Δq = máx Q_plan de los cambios − Q_plan de quedarse; Δw igual con
+  W(normal | pista); Δbase = máx(suma de base del que entra − la del que sale). «Dice cambiar» = Δq > 0,5 victorias /
+  Δw > 0,02 / Δbase ≥ 40. Fracción de los «quedarse» en que cada uno decía cambiar; «cambia aunque quedarse es mejor» =
+  Q_plan(elegido) < Q_plan(quedarse) − 0,5; acuerdo con el máximo de Q_plan. Resultado cuando el planificador decía
+  cambiar: victoria en el combate siguiente quedándose − cambiando, controlado por ronda.
+- **Calidad por el resultado**: cambiar − quedarse en la victoria del combate siguiente y en completar la ronda,
+  controlado por estratos (ronda × tercio de Q_plan(quedarse) dentro de la ronda = estados comparables).
+
+**C. Sinergias** (booleanas por equipo):
+- **lluvia** = Danza Lluvia y (un ataque de agua, Trueno o Nado Rápido); **sol** = Día Soleado y (ataque de fuego,
+  Rayo Solar, Meteorobola o Clorofila); **arena** = (Tormenta Arena o Chorro Arena) y ≥ 2 miembros roca / tierra / acero;
+  **granizo** = Granizo y ≥ 2 miembros de hielo; **Relevo** = un Pokémon con Relevo y una mejora o Sustituto;
+  **pantallas** = Reflejo o Pantalla de Luz; **Púas**; **clérigo** = Cascabel Cura / Aromaterapia; **núcleo
+  fuego / agua / planta** = un miembro de cada tipo; **pareja defensiva** = dos miembros que resisten cada uno todas las
+  debilidades del otro.
+- **Línea base** de una decisión = fracción de sus opciones (20 tríos, 10 opciones de cambio) con la sinergia; **lift**
+  = presencia en lo elegido / línea base, sobre las decisiones con alguna opción que la tiene; también elegida − base.
+- **Usada** en combate: se eligió el movimiento que la activa (o salió nuestro Chorro Arena); **aprovechada**: lluvia /
+  sol = ataque de agua o Trueno (fuego, Rayo Solar, Meteorobola) con ese clima, o Nado Rápido en lluvia; arena /
+  granizo = una decisión con ese clima y el rival activo sin inmunidad; Relevo = relevar con mejoras o Sustituto;
+  pantallas = alguna decisión con la pantalla puesta; Púas = el rival cambia de Pokémon con Púas puestas; clérigo =
+  usado con un miembro con estado.
+
+**D. Influencia de la pista y de los rasgos** (de las sondas): **cambia** = la opción de la sonda ≠ la real; **equipo
+cambia** = el equipo resultante es otro. **Δ resistencias**: sonda «ninguna» = resistencias al tipo de la pista del
+equipo real − del de la sonda; sonda «tipo t» = resistencias a t del equipo de la sonda − del real (positivo: la pista
+hace añadir resistencias al tipo anunciado). **Δ x2**, igual con miembros con un ataque súper eficaz contra el tipo.
+**ΔQ_plan** = Q_plan(elección real) − Q_plan(elección de la sonda). Acuerdo con el máximo de Q_plan, con y sin rasgos.
+
+**E. Estados y mejoras** (decisiones de combate):
+- Grupos por efecto: Tóxico; envenenar; parálisis; sueño; Bostezo; confusión (Rayo Confuso, Contoneo, Camelo, Danza
+  Caos); Fuego Fatuo; Drenadoras. **Disponible** = el activo tiene ese movimiento utilizable; **tasa de uso** = elegido /
+  disponible; **cuándo**: PS propios, barra del rival, *amenaza KO* (algún movimiento visto del rival puede dejarnos KO,
+  `rl/damage.py`), rival ya con estado, turno, al usarlo frente a cuando estaba disponible.
+- **Acierta** = en la decisión siguiente el rival muestra el estado nuevo (o confusión / Drenadoras / Bostezo). **Error**
+  = no podía funcionar con lo que se veía: rival tras Sustituto; Velo Sagrado; ya con estado mayor (o confuso, o con
+  Drenadoras); inmune por tipo (los movimientos de parálisis comprueban la tabla de tipos: Onda Trueno contra tierra;
+  Tóxico / veneno contra veneno o acero; Fuego Fatuo contra fuego; Drenadoras contra planta); habilidad conocida
+  (Flexibilidad, Inmunidad, Insomnio / Espíritu Vital, Ritmo Propio, Velo Agua).
+- **Mejoras** ofensivas (las del barredor con mejora) y defensivas (Def, DefEsp, evasión, precisión, Masa Cósmica,
+  Reducción, Rizo Defensa, Reserva): uso, cuándo, *cae después* (nuestro Pokémon se debilita ese turno) y *tope* (las
+  estadísticas que sube ya en +6).
+- **Resultado**: victoria del combate con − sin cada rasgo (usar un estado, una mejora, Explosión, cambiar de Pokémon;
+  cada sinergia, papel o arquetipo del equipo), controlado por ronda.
+
+**F. Elección de movimiento**: eficacia elegida y la mejor disponible; elige la mejor eficacia; ataque resistido
+habiendo uno neutro; elige el de **máximo daño** (estimación media de `rl/damage.py`); **KO seguro** = daño mínimo
+estimado ≥ barra de PS del rival: lo toma, y con el más preciso cuando hay varios; **riesgo innecesario** = había otro
+ataque más preciso con ≥ 85 % del daño medio del elegido; precisión media; golpes de KO directo y Explosión (uso y
+momento: PS, barra rival, vivos, turno, amenaza); **efecto secundario** (probabilidad > 0 o crítico alto) entre ataques
+de daño parecido (≥ 85 % del máximo) frente a elegir al azar entre ellos; **STAB** y «sin STAB pero más eficaz que el
+mejor STAB»; **prioridad** con el rival a ≤ 25 % (separando si somos seguro más rápidos); **contacto** frente a
+habilidades que lo castigan (Elec. Estática, Punto Tóxico, Efecto Espora, Cuerpo Llama, Piel Tosca, Gran Encanto
+posibles en la especie) con − sin, controlado por ronda.
+
+**G. Cambios en combate**: **voluntario** = cambiar pudiendo atacar; tasa de cambio dada cada situación (sí / no y
+diferencia controlada por ronda): **desventaja** (algún tipo de ataque visto o STAB del rival nos hace ×2), PS < 1/3,
+rival con subidas ≥ 2, estado propio, amenaza KO. **Resistencia** del que entra = fracción de esos tipos que resiste;
+frente a la media de los otros posibles; elige el que más resiste. Igual en los cambios forzados. **Se queda y cae** =
+amenazado de KO, con cambio posible, ataca y se debilita ese turno.
+
+**H. Resultados y confianza**: victorias por combate (por ronda y posición), P(completar la ronda | llegar), racha
+media (rachas desde la ronda 1); turnos y decisiones por combate; **margen** = fracción de PS que nos quedan al ganar;
+**entropía** −Σ p log p sobre las opciones legales y **prob. máxima** por tipo de decisión; victoria por tercios de
+prob. máxima (táctico: combate siguiente; combate: prob. máxima media, controlado por ronda); **calibración** del
+valor del combatiente en su primera decisión; acuerdo búsqueda–red; **suerte**: fracción de derrotas y victorias con
+algún evento en contra (`BAD_FOR_US` de §21), balance de suerte y eventos por combate.
+
+**Sección marcada (verdad)**: fracción de combates perdidos según las especies del equipo verdadero del rival.
+
+### 23.5 Cómo lanzarlo
+
+```bash
+python -m rl.play_sim --mode net --battles 22000 --late-runs 300 --procs 3 --out runs/playstudy_v3
+python -m rl.play_sim --mode search --battles 14000 --late-runs 200 --procs 2 --suffix _a --out runs/playstudy_v3
+python -m rl.playstats --logs runs/playstudy_v3/net --out runs/playstudy_v3/report_net
+python -m rl.playstats --logs runs/playstudy_v3/search --out runs/playstudy_v3/report_search
+python -m pytest tests/python/test_playlog.py
+```
+El *runner* del emulador crea un `PlayLogger` y en cada decisión llama a `PlayAgent.tactician` / `battler` (o a su
+propio agente) y a `logger.decision(...)`; `rl.playstats --logs <carpeta>` funciona igual sobre esos registros (las
+claves que falten en `extras` dejan vacías las métricas que las necesitan).
