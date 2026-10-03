@@ -2445,3 +2445,69 @@ python -m pytest tests/python/test_agent_probe.py
 Para un checkpoint nuevo basta volver a lanzar `curve` con él añadido a `--ckpts`: lo ya calculado se reutiliza. El
 checkpoint de la iteración i de v4 es `runs/alphazero_v4/ckpt_<40014·(i+1), 11 cifras>.pt`; conviene copiarlo con su
 `team_eval_*.pt` (el que nombra el checkpoint) porque `latest.pt` cambia mientras entrena.
+
+### 25.6 Primeros resultados (2026-10-03; v4 en la iteración 899 de 1500, aún sin la caída de la tasa)
+
+Ejecución: `curve` con v3 final y v4 en las iteraciones 50, 100, 200, …, 800 y 899; 2 procesos con `nice 15`
+mientras v4 entrenaba. Banco: 500 rachas de v3 (2.559 combates, 100 s); B = 1.779 inicios (R5 650, R6 650, R3 300,
+Noland 179) × 4 semillas; C1 = 300 alquileres + 600 cambios; C2 = 50 + 100 decisiones × 32 semillas. Coste: B ~35 s
+por checkpoint (~90.000 decisiones); C1 ~22 s; C2 (1.412 opciones, 45.000 partidas hasta el final de la ronda) 39 min
+la primera vez (cada checkpoint nuevo solo añade sus opciones nuevas); A ~6,5 min por combinación (512 rachas × 6
+rondas); búsqueda 512 sobre 300 × 2: 5–7 min; perfecta 2048: 11–13 min. Informe: `runs/probe/report/report.md`.
+
+**B. Combatiente** (red voraz; victorias por combate, ± IC 95 %; Δ emparejada con v3 final):
+
+| | total | R3 | R5 | R6 | Noland | Δ vs v3 |
+|---|---|---|---|---|---|---|
+| v3 final | 89,0 ± 1,0 | 96,4 | 87,7 | 90,4 | 76,5 | – |
+| v4 it 50 | 83,3 | 93,3 | 81,3 | 83,7 | 72,3 | −5,7 ± 1,0 |
+| v4 it 300 | 85,9 | 95,3 | 84,1 | 87,4 | 70,9 | −3,2 ± 0,9 |
+| v4 it 600 | 87,1 | 95,5 | 86,0 | 87,9 | 74,4 | −1,9 ± 0,9 |
+| v4 it 899 | 87,5 ± 1,1 | 95,8 | 85,9 | 88,5 | 76,0 | −1,5 ± 0,9 |
+
+En un subconjunto de 300 × 2 (mismos estados y semillas que la red): la búsqueda legal de 512 no añade nada a la red
+(v3 −0,2 ± 1,6; v4 +0,8 ± 2,0 puntos); la búsqueda **perfecta** de 2048 añade +5,0 ± 2,5 (v3) y +4,5 ± 2,3 (v4).
+
+**C1. Táctico, Regret_Q** (victorias según el Q_plan de v3): la red de v4 baja de 0,31 (alquiler) / 0,13 (cambio) en
+la it. 50 a 0,06 / 0,03 en la 899, lo mismo que la red de v3 final (0,06 / 0,03); acuerdo con el máximo de Q_plan
+59 % / 82 %. El planificador de v4 (su propio W) se separa del de v3 en 0,02 / 0,006.
+
+**C2. Táctico, resultado real** (combatiente fijo = red de v3): valor de la opción elegida ≈ 3,42 victorias en lo que
+queda de ronda para la red de v3 **y** la de v4 it. 899 (Δ emparejada −0,003 ± 0,056); ningún checkpoint ni el
+planificador se separan de la red de v3 más allá del ruido (Δ entre −0,07 y 0,00). Regret: bruto 0,34 victorias
+(10 puntos de P(completar) por decisión), validado 0,08 ± 0,09 victorias (0,6 ± 2,1 puntos de P(completar)): casi
+todo el regret bruto es el sesgo del máximo; el regret real del táctico por decisión está entre esos dos números y
+con 32 semillas no se distingue de 0.
+
+**A. Juego cruzado** (P(completar) por ronda, 512 rachas, semilla 777; v3 + v3 reproduce §20.6: 85,4 / 85,9 / 65,2 /
+79,9 / 43,0 / 43,8, P(6) 7,2 %):
+
+| táctico | combatiente | R5 | R6 | P(6) |
+|---|---|---|---|---|
+| red v3 | v3 | 43,0 | 43,8 | 7,19 % [6,0, 8,4] |
+| red v4 899 | v4 899 | 38,3 | 33,2 | 4,20 % [3,4, 5,1] |
+| red v3 | v4 899 | 35,4 | 35,7 | 3,87 % |
+| red v4 899 | v3 | 41,2 | 42,0 | 6,36 % |
+| planificador v4 | v4 899 | 38,9 | 37,9 | 5,05 % |
+| planificador v3 | v3 | 41,8 | 40,2 | 6,55 % |
+
+Diferencias emparejadas de P(completar), media de R1–R6: combatiente v4 − v3 = −5,4 ± 2,1 (con el táctico de v3) y
+−3,4 ± 2,0 (con el de v4); táctico v4 − v3 = +1,1 ± 1,8 / −0,9 ± 1,8 (no significativo); planificador − red v4 como
+táctico +1,2 ± 1,7 (no significativo).
+
+**Lectura.**
+- **Combatiente**: es el agente que sigue aprendiendo en v4 (+4 puntos por combate de la it. 50 a la 899, todavía
+  subiendo despacio: +0,4 de la 600 a la 899) y el que explica todo el retraso de v4 frente a v3 (−1,5 puntos por
+  combate en B, −3 a −5 puntos de P(completar) por ronda en A). v3 final terminó **después** de la caída de la tasa
+  (WSD), que en v3 dio +3 puntos de P(6); v4 todavía no la ha empezado (it. 1275–1499), así que esta distancia es la
+  esperada a estas alturas y no una meseta. **Margen**: la búsqueda perfecta saca +4,5–5 puntos por combate en el
+  mismo subconjunto (techo con información perfecta; la búsqueda legal no saca nada), y R5 / Noland (86 / 76 %) son
+  donde más falta. Si tras la caída v4 no pasa de ~89 % en B, el combatiente estará en la meseta de esta red.
+- **Táctico**: llegó pronto (Regret_Q de v3 hacia la it. 300–900) y por el resultado real no se distingue de v3 ni
+  del planificador; su regret real por decisión es pequeño (validado ~0,6 puntos de P(completar), indistinguible de
+  0). Margen del táctico **con este combatiente**: pequeño; no es el cuello de botella. El planificador como táctico
+  no es mejor que la red (en A, +1,2 ± 1,7 puntos; en C2, −0,02): la red del táctico ha destilado su planificador y
+  no le añade casi nada.
+- Para saber cuánto falta de verdad al táctico haría falta C2 con más semillas (el IC del regret validado, ±0,09
+  victorias con 32 semillas, se estrecha como 1/√semillas) o un combatiente más fuerte (con el techo perfecto los
+  equipos podrían importar más).
