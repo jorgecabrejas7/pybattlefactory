@@ -2330,3 +2330,14 @@ Lo principal (IC 95 % en los informes; R = ronda):
 - **Movimientos**: mejor eficacia en el 92 %, máximo daño en el 74 %, toma el KO seguro en el 81 %; evita el contacto
   contra habilidades que lo castigan (−17 puntos). **Cambios en combate**: cambia +10 puntos más en desventaja de
   tipos y el que entra resiste mejor que la alternativa en el 87 %; amenazado de KO, se queda y cae el 20 %.
+
+## 26. Rumbo de alphazero_v5 (decidido con el usuario 2026-10-03, a confirmar con las sondas de §25)
+- **Combatiente**: (1) el modelo del rival aprendido como ENTRADA ("rasgos de amenaza": para cada rival, a partir de
+  sus sets probables, la probabilidad de que tenga un ataque súper eficaz contra cada uno de los nuestros y el daño
+  máximo esperado que puede hacerles); (2) el modelo aprendido también en la búsqueda del entrenamiento (en lugar de
+  `factory_sets`), para entrenar en el mismo mundo en que se juega.
+- **Táctico**: Q_plan como línea base de PPO (ventaja = retorno − Q_plan, menos ruido); táctico = planificador +
+  corrección aprendida (la red solo aprende cuándo desviarse); planificador mejorado (más rivales sorteados, más
+  profundidad y planificación explícita para Noland: IVs altos y exclusión de nuestros sets). (La W condicionada a la
+  pista ya existe desde v3.)
+- Muchas iteraciones con WSD, como v4.
