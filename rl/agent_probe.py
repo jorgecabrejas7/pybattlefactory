@@ -942,16 +942,31 @@ def c2_regret(table, choices):
     return raw, cv, ids
 
 
-def summarize_c2(spec, bench_name=BENCH_NAME, table=None):
+def completion_table(table, bench):
+    """The outcome table as P(complete the round): wins == the battles left in the round (8 - battle)."""
+    return {i: {o: (v >= 8 - bench.by_id[i]["battle"]).astype(np.float64) for o, v in opts.items()}
+            for i, opts in table.items()}
+
+
+def summarize_c2(spec, bench_name=BENCH_NAME, table=None, ref_spec=None):
+    """Regret (raw / validated) and value of the chosen options, in wins left in the round and in P(complete the
+    round); with ref_spec, the paired difference of the chosen option's value (spec - ref) state by state."""
     bench = Bench(bench_name)
     table = table if table is not None else outcome_table(bench_name)
+    comp = completion_table(table, bench)
     ch = {i: r["choice"] for i, r in load_choices(spec, bench_name).items()}
+    ref = {i: r["choice"] for i, r in load_choices(ref_spec, bench_name).items()} if ref_spec else None
     out = {}
     for kind in ("all", "rental", "swap"):
-        t = {i: v for i, v in table.items() if kind == "all" or bench.by_id[i]["kind"] == kind}
-        raw, cv, ids = c2_regret(t, ch)
-        val = [t[i][ch[i]].mean() for i in ids]
-        out[kind] = {"raw": mean_ci(raw), "cv": mean_ci(cv), "value": mean_ci(val)}
+        for unit, tab in (("", table), ("complete_", comp)):
+            t = {i: v for i, v in tab.items() if kind == "all" or bench.by_id[i]["kind"] == kind}
+            raw, cv, ids = c2_regret(t, ch)
+            val = [t[i][ch[i]].mean() for i in ids]
+            d = {unit + "raw": mean_ci(raw), unit + "cv": mean_ci(cv), unit + "value": mean_ci(val)}
+            if ref is not None:
+                d[unit + "diff_ref"] = mean_ci([t[i][ch[i]].mean() - t[i][ref[i]].mean() for i in ids
+                                                if ref.get(i) in t[i]])
+            out.setdefault(kind, {}).update(d)
     return out
 
 
@@ -1192,23 +1207,29 @@ def report(a, ckpts=None, latest=None):
               f"{len(table)} decisiones, {n_opt} opciones jugadas × {m['c2']['seeds']} semillas hasta el final de la "
               "ronda (victorias que quedan en la ronda). Regret bruto (sesgado hacia arriba) y validado en mitades "
               "de las semillas (sesgado hacia abajo); valor = victorias medias con la opción elegida.", "",
-              "| táctico | regret bruto | regret validado | alquiler (validado) | cambio (validado) | valor |",
-              "|---|---|---|---|---|---|"]
+              "| táctico | regret bruto | regret validado | alquiler (validado) | cambio (validado) | valor | "
+              "Δ valor vs red v3 | regret validado en P(completar) (puntos) | Δ P(completar) vs red v3 |",
+              "|---|---|---|---|---|---|---|---|---|"]
         for c in ckpts:
             for k in ("net", "planner"):
                 spec = f"{k}:{c}"
                 if not load_choices(spec, a.bench):
                     continue
-                s = summarize_c2(spec, a.bench, table)
+                s = summarize_c2(spec, a.bench, table, ref_spec=f"net:{GEN_CKPT}")
                 name = f"{'red' if k == 'net' else 'planificador'} {_label(c)}"
                 summary["c2"][name] = s
-                L.append(f"| {name} | {_fmt(*s['all']['raw'][:2], pct=False, d=3)} | "
-                         f"{_fmt(*s['all']['cv'][:2], pct=False, d=3)} | {_fmt(*s['rental']['cv'][:2], pct=False, d=3)}"
-                         f" | {_fmt(*s['swap']['cv'][:2], pct=False, d=3)} | {_fmt(*s['all']['value'][:2], pct=False, d=2)} |")
+                al = s["all"]
+                L.append(f"| {name} | {_fmt(*al['raw'][:2], pct=False, d=3)} | "
+                         f"{_fmt(*al['cv'][:2], pct=False, d=3)} | {_fmt(*s['rental']['cv'][:2], pct=False, d=3)}"
+                         f" | {_fmt(*s['swap']['cv'][:2], pct=False, d=3)} | {_fmt(*al['value'][:2], pct=False, d=2)} | "
+                         f"{_fmt(*al['diff_ref'][:2], pct=False, d=3)} | {_fmt(*al['complete_cv'][:2])} | "
+                         f"{_fmt(*al['complete_diff_ref'][:2])} |")
         # the best option itself (oracle, per half) for reference
         best = [max(v.mean() for v in opts.values()) for opts in table.values()]
+        comp = completion_table(table, bench)
+        bestc = [max(v.mean() for v in opts.values()) for opts in comp.values()]
         L += ["", f"Valor del mejor de las opciones jugadas (con el sesgo del máximo): {_fmt(*mean_ci(best)[:2], pct=False, d=2)}"
-              " victorias.", ""]
+              f" victorias; P(completar) {_fmt(*mean_ci(bestc)[:2])} %.", ""]
 
     # ---- A
     v3 = GEN_CKPT
@@ -1260,7 +1281,22 @@ def report(a, ckpts=None, latest=None):
     # ---- plots
     if v4:
         xs = [ckpt_info(c)["iteration"] for c in v4]
-        fig, ax = plt.subplots(1, 3, figsize=(15, 4.2))
+        fig, axs = plt.subplots(2, 2, figsize=(13, 8.4))
+        ax = [axs[0, 0], axs[1, 0], axs[1, 1], axs[0, 1]]
+        ys, es = [], []
+        for c in v4:
+            s = summary["battler"].get(_label(c))
+            ys.append(s["diff_v3"][0] * 100 if s else np.nan)
+            es.append(s["diff_v3"][1] * 100 if s else np.nan)
+        ax[3].errorbar(xs, ys, yerr=es, marker="o", capsize=3, color="C0", label="red v4 − red v3 (total)")
+        ax[3].axhline(0, color="k", ls="--", lw=1)
+        for spec, d in summary["search"].items():
+            if spec.startswith("perfect"):
+                ax[3].axhline(d["diff"][0] * 100, color="C3", ls=":", lw=1,
+                              label=f"{spec.split('-', 1)[0]} − red, misma red ({spec.split('-', 1)[1]})")
+        ax[3].set_title("B: diferencia emparejada con v3 final (puntos)")
+        ax[3].set_xlabel("iteración de v4")
+        ax[3].legend(fontsize=7)
         for key, lab in (("overall", "total"), ("r5", "R5"), ("r6", "R6"), ("noland", "Noland"), ("r3", "R3")):
             ys, es = [], []
             for c in v4:
@@ -1290,14 +1326,11 @@ def report(a, ckpts=None, latest=None):
             ys, es = [], []
             for c in v4:
                 s = summary["c2"].get(f"{who} {_label(c)}")
-                ys.append(s["all"]["cv"][0] if s else np.nan)
-                es.append(s["all"]["cv"][1] if s else np.nan)
-            ax[2].errorbar(xs, ys, yerr=es, fmt=st, capsize=3, label=f"{who} (validado)")
-            r3 = summary["c2"].get(f"{who} v3 final")
-            if r3:
-                ax[2].axhline(r3["all"]["cv"][0], ls=":", lw=1, color="k" if who == "red" else "gray",
-                              label=f"{who} v3 final")
-        ax[2].set_title("C2: regret por resultado real (victorias)")
+                ys.append(s["all"]["diff_ref"][0] if s else np.nan)
+                es.append(s["all"]["diff_ref"][1] if s else np.nan)
+            ax[2].errorbar(xs, ys, yerr=es, fmt=st, capsize=3, label=f"{who} v4 − red v3")
+        ax[2].axhline(0, color="k", ls="--", lw=1)
+        ax[2].set_title("C2: valor elegido − red v3 (victorias, emparejado)")
         ax[2].set_xlabel("iteración de v4")
         ax[2].legend(fontsize=7)
         fig.tight_layout()
