@@ -2330,3 +2330,118 @@ Lo principal (IC 95 % en los informes; R = ronda):
 - **Movimientos**: mejor eficacia en el 92 %, máximo daño en el 74 %, toma el KO seguro en el 81 %; evita el contacto
   contra habilidades que lo castigan (−17 puntos). **Cambios en combate**: cambia +10 puntos más en desventaja de
   tipos y el que entra resiste mejor que la alternativa en el 87 %; amenazado de KO, se queda y cae el 20 %.
+
+## 25. Sondas por agente: cuánto ha aprendido cada uno, por separado (`rl/agent_probe.py`, 2026-10-03)
+
+Objetivo (decidido por el usuario): saber **por separado** cuánto ha aprendido el combatiente y cuánto el táctico, y si
+a cada uno le queda margen, para no confundir una meseta del conjunto (P(6 rondas) que deja de subir) con que los dos
+agentes se hayan estancado. Es solo diagnóstico: nada de esto entra en el entrenamiento (el módulo se niega a
+arrancar en un proceso marcado como entrenamiento).
+
+### 25.1 Definiciones (de abajo arriba)
+
+- **Estado de decisión del táctico**: una pantalla de alquiler o de cambio de una racha concreta, reconstruida
+  exactamente con la **receta de repetición** de §21.1 (semilla del entorno + todas las acciones dadas al juego desde
+  el principio de la racha). Al reconstruirlo se comprueba el *hash* del estado del juego y el de la observación del
+  táctico; si no coinciden con los de la generación, se para.
+- **Inicio de combate** (como en §21.1): un estado de decisión del táctico + una opción aplicada. El rival es el que
+  el juego genera con esa opción (el verdadero; se comprueba con un *hash* de `gEnemyParty`) y la semilla del RNG del
+  combate se fija antes del primer fotograma. Con la misma semilla, el mismo combatiente juega exactamente el mismo
+  combate.
+- **Banco fijo** (`runs/probe/battles_v1/`): el conjunto de estados guardado **una vez** y reutilizado para todos los
+  checkpoints. Así, dos checkpoints juegan los mismos estados con las mismas semillas.
+- **Comparación emparejada**: con los mismos estados y semillas, la diferencia entre dos agentes se mide estado a
+  estado (d_s = media de A en s − media de B en s) y su IC al 95 % es media(d) ± 1,96·desv(d)/√n. El azar común se
+  cancela en buena parte, así que el IC de la diferencia es mucho más estrecho que el de cada tasa por separado.
+- **IC al 95 %** de una media: ± 1,96·desv/√n sobre las unidades independientes (los estados; las semillas de un
+  mismo estado se promedian antes, porque no son independientes entre sí).
+- **Q_plan** (§20): el valor que el planificador del táctico (W + expectimax) da a cada opción, en victorias
+  esperadas. **Planificador de referencia**: el de v3 final (su W `team_eval_0580.pt`), con la misma semilla del
+  planificador en cada estado para todos los checkpoints.
+- **Regret** de una elección = valor de la mejor opción − valor de la opción elegida (0 = eligió la mejor). Se mide
+  de dos maneras:
+  - **Regret_Q**: con el Q_plan de referencia (barato, pero es la opinión del planificador, no el resultado).
+  - **Regret por resultado real**: con las victorias que se consiguen de verdad jugando cada opción.
+- **Sesgo del máximo**: el máximo de varias medias con ruido es, en promedio, mayor que el máximo de los valores
+  verdaderos; por eso "mejor − elegida" con las mismas semillas sobrestima el regret. **Regret validado**: se elige la
+  mejor opción con la mitad de las semillas y se mide con la otra mitad (y al revés, promediando): no tiene ese sesgo
+  (tiende a quedarse corto, porque la mitad de las semillas a veces elige mal la mejor). La verdad queda entre los
+  dos.
+- **Planificador como táctico**: el táctico sustituido por "elegir el máximo de Q_plan" con el mismo W / planificador
+  del checkpoint. Mide si la red del táctico añade algo sobre sus propios rasgos.
+- **Juego cruzado**: táctico de un checkpoint X con combatiente de otro checkpoint Y (los dos con la codificación v5 y
+  el táctico con los rasgos de **su** checkpoint).
+
+### 25.2 El banco (`generate`, una vez)
+
+Rachas de alphazero_v3 final (`runs/alphazero_v3/latest.pt`; táctico = su red voraz con sus rasgos W / planificador,
+la semilla del planificador fija por estado; combatiente = su red voraz) desde el principio de las rondas 5 / 6 / 3
+(40 / 40 / 20 %), con el protocolo de `rl.eval_rounds` (la racha se para al completar la ronda o al perder). Cada
+decisión del táctico es un estado. De ellos, muestreo estratificado (fijo):
+- **B**: inicios de combate con la opción que eligió v3 (nuestro equipo y el rival verdadero fijos): cuotas
+  R5 650, R6 650, R3 300, Noland 250 (las que haya); **K = 4 semillas** por estado.
+- **C1**: 300 alquileres + 600 cambios. **C2**: subconjunto de C1, 50 alquileres + 100 cambios estratificados por
+  ronda, con **32 semillas** por estado.
+
+### 25.3 Qué mide cada sonda
+
+**B. Solo el combatiente.** Cada combatiente juega exactamente los inicios de combate de B con sus K semillas →
+victorias por combate (total y por estrato: R3, R5, R6, Noland) con IC, y la diferencia emparejada con v3 final.
+Combatientes: la red de cualquier checkpoint (voraz, por lotes en la GPU); opcional, sobre un subconjunto fijo de B, la
+búsqueda legal de 512 con el modelo del rival «experience» (el del checkpoint si lo lleva, si no
+`runs/opp_model_v3/model.pt`) y la búsqueda **perfecta** de 2048 (información perfecta: un techo de referencia, solo
+diagnóstico).
+
+**C. Solo el táctico, con un combatiente fijo** (la red de v3 final, voraz).
+- **C1**: en cada estado de C1, la elección de la red del táctico de cada checkpoint (con sus propios rasgos) y la del
+  planificador como táctico; Regret_Q con el planificador de referencia y acuerdo con su máximo.
+- **C2**: cada opción de un estado de C2 (cambio: las ≤ 10; alquiler: las 8 mejores según el Q_plan de referencia
+  más todas las que haya elegido algún táctico evaluado) se juega con el combatiente fijo desde ese estado con las 32
+  semillas emparejadas **hasta el final de la ronda** (entre combates decide el táctico de v3 final, también fijo).
+  Resultado de una opción = victorias que quedan en la ronda. La tabla de resultados se calcula **una vez por opción**
+  y la comparten todos los checkpoints: un checkpoint nuevo solo añade las opciones que nadie había elegido. Por
+  checkpoint: regret bruto y validado (media ± IC sobre estados), por tipo (alquiler / cambio), y el valor medio de lo
+  elegido.
+
+**A. Juego cruzado.** Protocolo de `rl.eval_rounds` (rondas 1–6, N rachas por ronda, semilla 777; la racha j de la
+ronda k usa el entorno de semilla (777 + 1000k)·100003 + j, y empieza en el alquiler de la ronda k), combatiente de
+red sola. Combinaciones: (táctico X, combatiente Y) para X, Y ∈ {v3 final, v4 último} y el planificador como táctico
+(del mismo checkpoint) con su combatiente. Las mismas rachas para todas las combinaciones (la semilla del
+planificador también es fija por decisión), así que sus diferencias por ronda son emparejadas. P(6 rondas) = producto
+de las P(completar) por ronda, con un IC *bootstrap*.
+
+### 25.4 Implementación
+
+- Un único bucle **en paralelo por lotes** (`play_lockstep`): hasta 256 partidas a la vez por proceso; en cada paso
+  todas las decisiones de combate pendientes se evalúan juntas en la GPU. Las decisiones sin elección se juegan como
+  en `FactoryEnv` (movimiento 0) y cuentan para el límite de 300 decisiones (un combate cortado cuenta como derrota).
+- Caché y reanudación: cada resultado se escribe en una línea (`runs/probe/results/...`, un archivo por agente y por
+  proceso) y al relanzar se saltan los que ya están. El coste de cada ejecución queda en `runs/probe/timing.jsonl`.
+- Conductor de curvas (`curve`): genera el banco si falta, y para cada checkpoint de la lista (más v3 final) B, C1 y
+  la ampliación de la tabla de C2; después la rejilla de A y las búsquedas de B en un subconjunto; informe en
+  `runs/probe/report/` (`report.md`, `summary.json`, `curves.png`).
+- Pruebas (`tests/python/test_agent_probe.py`): todo estado se reconstruye exactamente (hash del juego y de la
+  observación, mismo rival); el inicio de combate con el RNG propio del juego y la red de v3 reproduce **el mismo
+  resultado** que en la generación; los resultados de B no dependen del tamaño del lote y se reanudan; la elección de
+  la red de v3 en C1 es la de la generación; el planificador elige el máximo de Q_plan; la tabla de C2; el juego
+  cruzado manda cada decisión a la red que toca; el regret validado no tiene el sesgo del máximo (prueba con opciones
+  iguales); se niega a arrancar en un proceso de entrenamiento.
+
+### 25.5 Cómo lanzarlo
+
+```bash
+# todo (banco si falta, B / C1 / C2 / A, informe), reanudable; procesos y prioridad bajos mientras entrena v4
+nice -n 15 python -m rl.agent_probe curve --procs 2 --a-runs 512 \
+    --ckpts runs/alphazero_v4/ckpt_00004041414.pt,...,runs/alphazero_v4/latest_copia.pt \
+    --search search:runs/alphazero_v3/latest.pt,perfect:runs/alphazero_v3/latest.pt
+# piezas sueltas
+python -m rl.agent_probe battler --battler net:CKPT            # B (o search:CKPT[:SIMS], perfect:CKPT[:SIMS] --subset 300 --seeds 2)
+python -m rl.agent_probe tactician --tactician net:CKPT        # C1 (red y planificador)
+python -m rl.agent_probe outcomes --tactician net:CKPT         # C2: añade a la tabla lo que elige CKPT
+python -m rl.agent_probe crossplay --tactician net:X --battler net:Y --a-runs 512
+python -m rl.agent_probe report --ckpts ...                     # rehace el informe desde la caché
+python -m pytest tests/python/test_agent_probe.py
+```
+Para un checkpoint nuevo basta volver a lanzar `curve` con él añadido a `--ckpts`: lo ya calculado se reutiliza. El
+checkpoint de la iteración i de v4 es `runs/alphazero_v4/ckpt_<40014·(i+1), 11 cifras>.pt`; conviene copiarlo con su
+`team_eval_*.pt` (el que nombra el checkpoint) porque `latest.pt` cambia mientras entrena.
