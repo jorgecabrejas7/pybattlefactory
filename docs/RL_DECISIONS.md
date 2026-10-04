@@ -2522,3 +2522,550 @@ táctico +1,2 ± 1,7 (no significativo).
   profundidad y planificación explícita para Noland: IVs altos y exclusión de nuestros sets). (La W condicionada a la
   pista ya existe desde v3.)
 - Muchas iteraciones con WSD, como v4.
+
+## 27. Experimentos sin conexión del combatiente antes de alphazero_v5 (`rl/offline_data.py`, `rl/offline_train.py`, 2026-10-04)
+
+Pregunta: ¿cambios en la red del combatiente (más capacidad, más cómputo, otro objetivo de valor, objetivos de
+búsqueda mejores) la mejoran **mucho**, antes de pagar una ejecución larga de v5? Diagnóstico de partida: la red es
+pequeña (tronco ~0,54 M parámetros, 2 capas), entrena 2–3 s por iteración frente a 85 s de autojuego (la GPU está
+casi parada), su política queda a KL 0,65 del objetivo de Gumbel y su valor explica ~45 % de la varianza: ¿le falta
+capacidad? Todo se mide en el banco B de §25 (red sola, voraz), emparejado con v4 (`runs/alphazero_v4/stopped_it1111.pt`,
+it. 1111, **antes** de su caída de la tasa) y con un control.
+
+### 27.1 Definiciones (de abajo arriba)
+
+- **Destilación sin conexión** (*offline*): se juega una vez con v4 + búsqueda y se guardan las decisiones con lo que
+  la búsqueda recomendó; después se entrena una red **desde cero** solo con ese archivo, sin volver a jugar. Permite
+  comparar redes con exactamente los mismos datos, en minutos en lugar de días.
+- **Posición**: una decisión del combatiente en el autojuego. Se guarda su entrada codificada (la de la red), la máscara
+  de acciones legales, el **objetivo de política** (la distribución de Gumbel softmax(logits + σ(Q completada)) de
+  §19.1, exactamente lo que entrena v4), la Q de la raíz (media de Q ponderada por visitas), el resultado del combate
+  **z** (1 victoria / 0 derrota) y ronda, combate, Noland.
+- **Clave de repetición**: (run, li) = la racha (su semilla de `SimBackend.reset` y la lista de **todas** las acciones
+  dadas al juego) y cuántas de esas acciones van antes de la decisión. Como el simulador es determinista, aplicarlas
+  reconstruye el estado exacto y la memoria del jugador. Contrato y API: `runs/v5_offline/CONTRACT.md`.
+- **Apartado** (*held-out*): el 5 % de las rachas (todas sus posiciones) nunca se entrena; ahí se miden las métricas.
+- **KL(objetivo ‖ red)**: cuánta información pierde la política de la red respecto al objetivo de la búsqueda (0 =
+  idénticas). **Top-1**: fracción en que la acción más probable de la red es la del objetivo.
+- **Suelo de ruido**: dos búsquedas del mismo estado no dan el mismo objetivo (azar de la búsqueda). La red óptima
+  aprende el **objetivo medio**; su KL a un objetivo concreto nunca baja de E[KL(objetivo ‖ objetivo medio)]. Así,
+  KL de la red = suelo + KL(objetivo medio ‖ red), y solo el segundo término se puede reducir.
+- **EV** (varianza explicada, §7) del valor contra el objetivo de valor con que se entrenó; **EV z**: contra z.
+- **Brier**: media de (valor predicho − z)², en combates no cortados. Mide si el valor acierta el resultado real
+  (menor es mejor; predecir siempre la media daría ≈ 0,10).
+- **Objetivo de valor con mezcla m**: (1 − m) z + m Q_raíz. v4 usa m = 0,5. m = 0: solo el resultado; m = 1: solo la Q
+  de la búsqueda.
+- **Semilla de entrenamiento**: la inicialización y el orden de los lotes. Dos redes con la misma receta y distinta
+  semilla juegan distinto en B; esa variación (unos ±0,5 puntos aquí) es ruido que hay que separar de los efectos.
+- **IC bootstrap al 95 %**: se remuestrean los 1.779 estados de B con reemplazo 2.000 veces y se toman los percentiles
+  2,5 y 97,5 de la media (de la tasa o de la diferencia emparejada, §25.1). Para un grupo de semillas, cada estado
+  usa la media de las redes del grupo.
+
+### 27.2 El conjunto de datos (`python -m rl.offline_data record`)
+
+- **Cómo**: el trabajador de autojuego de v4 (`SelfPlayerV4`) con la red de it. 1111 en el servidor de la GPU, su
+  táctico (muestreado, con sus rasgos W / planificador y su tabla v_next), su currículo de rondas de salida, y la
+  búsqueda de entrenamiento: Gumbel, 256 simulaciones, 8 determinizaciones, top-16, rival `factory_sets` (permitido
+  solo en entrenamiento: el módulo llama a `mark_training()`, así que no puede existir búsqueda perfecta). Nada se
+  entrena durante la grabación. Un `SimBackend` que anota cada `reset` / `act` da la clave de repetición.
+- **Tamaño**: 3.335.841 posiciones de 20.336 rachas en **3 h** con 12 procesos (310 decisiones/s de media; bajó a
+  170–250/s mientras otro trabajo usaba la GPU). Apartadas 172.001 (5 % por racha). Rondas 1–6: 0,61 / 0,51 / 0,50 /
+  0,34 / 0,50 / 0,52 M; 7+: 0,36 M; Noland 141.253. 17 GB en `runs/v5_offline/main/` (un `.npy` por campo; los
+  fragmentos originales en `main/shards/`, otros 17 GB, se pueden borrar).
+- **Repetición exacta**: `python -m rl.offline_data check` (500 posiciones al azar) y las pruebas
+  (`tests/python/test_offline_data.py`: cada posición reconstruida da **la misma entrada codificada**, dos repeticiones
+  dan el mismo hash de estado, las dos formas de clave coinciden, el backend entregado es una copia, y una posición
+  repetida se puede volver a buscar). Las 3 re-búsquedas de abajo (374.224 posiciones) también comprueban cada
+  entrada: ninguna diferencia.
+- **Variantes de objetivo para las mismas posiciones** (`research`): las posiciones se reconstruyen con su clave y se
+  buscan otra vez. Sobre 171.938 posiciones (rachas enteras al azar; el plan era 400.000, pero la de 1.024 simulaciones
+  iba a 35/s con la GPU compartida y se cortó): (a) **1.024 simulaciones** (`factory_sets`), 77 min; (b) **256 con el
+  modelo del rival aprendido** (`experience`, el del checkpoint), 13 min; (c) sobre 30.348 de ellas, **otra búsqueda
+  de 256 igual que la original**, para medir el ruido.
+
+**El ruido del objetivo** (con (c) y (a)): dos búsquedas de 256 del mismo estado eligen la misma mejor acción solo el
+**57,8 %** de las veces (§20.2: 61 %); KL(objetivo₁ ‖ media de los dos) = 0,20, así que el suelo de ruido es ≈ 0,4
+(con dos muestras se ve la mitad, como en §20.2: 0,38–0,43). La búsqueda de 1.024 coincide con la de 256 en la mejor
+acción el 54,6 % y es más afilada (entropía 0,24 frente a 0,43). La red de v4 está a KL **0,719** de los objetivos
+apartados: ≈ 0,4 de suelo + ≈ 0,3 que sí se podría reducir.
+
+### 27.3 El entrenador (`python -m rl.offline_train`)
+
+Receta = la pérdida del combatiente de `rl.alphazero.train_iteration`: entropía cruzada al objetivo de política +
+0,5·MSE del valor normalizado (ValueNorm con la media y varianza exactas de los objetivos de entrenamiento), AdamW
+(3·10⁻⁴, decaimiento 10⁻⁴), recorte 1,0, lotes de 512, calentamiento de 1.000 pasos y caída coseno al 5 % a lo largo
+de 10 épocas (pasadas por los 3,16 M de posiciones de entrenamiento). **Control** = la arquitectura de v4 (d 128,
+2 capas, 4 cabezas) con esta receta, 3 semillas (`control`, y `thr_ctrl_s1/s2`, idénticas, entrenadas por §27.y).
+Se entrena solo el combatiente: las cabezas del táctico quedan sin entrenar, así que los checkpoints de
+`runs/v5_offline/models/` son combatientes, no agentes (B los juega con `net:`; llevan el modelo del rival de v4 para
+`search:`). ~10–25 min por red en la GPU (más con la GPU compartida).
+
+### 27.4 Resultados
+
+Tabla completa: `runs/v5_offline/report.md` (y `report_e4.md`). B = victorias por combate en B (red sola, voraz,
+1.779 inicios × 4 semillas); Δ = diferencia emparejada en puntos con IC bootstrap al 95 %; "fwd" = milisegundos por
+pasada de la red con lotes de 256 en la GPU (fp32, medido intercalado, `speed.json`), relativo al control.
+
+| variante | semillas | parámetros | KL apart. | top-1 | Brier | B % | R5 | R6 | R3 | Noland | Δ vs control | Δ vs v4 | fwd |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| v4 it 1111 (en línea) | 1 | 0,65 M | 0,719 | 0,592 | 0,092 | 87,9 | 86,6 | 88,2 | 95,8 | 78,4 | – | – | – |
+| **control** (d 128, 2 capas, 10 ép., m 0,5) | 3 | 0,65 M | 0,717 | 0,580 | 0,084 | 88,8 | 87,5 | 89,4 | 96,2 | 78,6 | – | +0,9 [+0,1, +1,6] | 1,00× |
+| datos 25 % (0,8 M) | 1 | 0,65 M | 0,779 | 0,555 | 0,092 | 86,4 | 83,5 | 88,2 | 94,7 | 76,7 | −2,4 [−3,2, −1,6] | −1,5 [−2,5, −0,5] | 1,00× |
+| datos 50 % (1,6 M) | 1 | 0,65 M | 0,744 | 0,571 | 0,087 | 87,9 | 86,6 | 88,4 | 96,0 | 77,0 | −0,9 [−1,7, −0,2] | −0,1 [−1,0, +0,9] | 1,00× |
+| 20 épocas | 2 | 0,65 M | 0,717 | 0,582 | 0,087 | 89,5 | 88,3 | 90,2 | 96,5 | 79,7 | +0,7 [+0,2, +1,2] | +1,6 [+0,8, +2,4] | 1,00× |
+| 4 capas | 1 | 0,92 M | 0,716 | 0,580 | 0,085 | 88,2 | 86,3 | 89,3 | 95,8 | 78,1 | −0,6 [−1,3, +0,1] | +0,3 [−0,7, +1,1] | 1,49× |
+| 6 capas | 1 | 1,18 M | 0,718 | 0,580 | 0,084 | 88,6 | 86,7 | 89,6 | 96,0 | 78,9 | −0,2 [−0,8, +0,5] | +0,6 [−0,3, +1,6] | 1,98× |
+| doble anchura (d 256) | 2 | 2,10 M | 0,713 | 0,583 | 0,088 | 89,3 | 87,8 | 90,2 | 96,3 | 80,2 | +0,6 [+0,0, +1,1] | +1,4 [+0,6, +2,2] | 1,62× |
+| d 256, 4 capas | 1 | 3,15 M | 0,723 | 0,580 | 0,088 | 89,3 | 88,0 | 90,2 | 96,3 | 79,1 | +0,6 [−0,2, +1,2] | +1,4 [+0,5, +2,3] | **2,54×** |
+| valor m = 0 (solo z) | 1 | 0,65 M | 0,727 | 0,577 | 0,110 | 88,3 | 86,7 | 89,6 | 95,8 | 77,2 | −0,4 [−1,1, +0,2] | +0,4 [−0,5, +1,3] | 1,00× |
+| **valor m = 1 (solo Q raíz)** | 3 | 0,65 M | **0,708** | 0,585 | **0,080** | 88,8 | 87,7 | 89,6 | 96,6 | 77,0 | +0,0 [−0,4, +0,5] | +0,9 [+0,1, +1,7] | 1,00× |
+| **d 256 + m = 1** | 2 | 2,10 M | **0,705** | 0,587 | 0,081 | **89,8** | 88,5 | 90,3 | 96,6 | 80,9 | **+1,0 [+0,5, +1,5]** | **+1,9 [+1,0, +2,7]** | 1,62× |
+
+(KL apart. y Brier: media de las semillas, última época. El Brier de v4 sale de su propio valor en la raíz, grabado.)
+
+**E1, capacidad y cómputo.** Más profundidad no mejora nada (4 y 6 capas: KL 0,716 / 0,718, B −0,6 / −0,2). El doble de
+anchura baja la KL 0,004 y da +0,6 [0,0, +1,1] en B, a 1,6× de coste; d 256 con 4 capas ya sobreajusta (KL 0,723) y
+cuesta 2,5×. Más épocas: 20 frente a 10 dejan la KL igual (0,717) pero dan +0,7 [+0,2, +1,2] en B (2 semillas). La
+KL de **entrenamiento** tampoco baja con más capacidad (≈ 0,69 en todas, salvo d 256: 0,65, que sobreajusta): **la red
+no está corta de capacidad**; la KL ~0,7 es ≈ 0,4 de ruido del objetivo + lo que permiten los datos. Dónde deja de
+mejorar la KL apartada: ya en el tamaño de v4 (d 128, 2 capas) y a las ~10 épocas.
+
+**Datos.** Es lo único que mueve mucho la aguja: con la misma red y receta, 0,8 / 1,6 / 3,2 M posiciones dan KL
+0,779 / 0,744 / 0,717 (−0,03 por cada duplicación, sin aplanarse todavía) y B 86,4 / 87,9 / 88,8 %; con 0,16 M
+(E4, abajo) 79,6 %. Una red desde cero con 3,2 M posiciones de un solo checkpoint ya iguala o pasa a v4, que vio
+~45 M posiciones pero siempre de una ventana de 4 iteraciones (160.000 posiciones), con reuso 4.
+
+**E3, objetivo de valor.** Con m = 0 (solo z) el valor sobreajusta en seguida (las posiciones de un mismo combate
+comparten z: la red memoriza combates): Brier 0,085 en la época 1 → 0,110 en la 10, y arrastra a la política (KL
+0,727). Con m = 0,5 (v4) pasa lo mismo, más despacio (0,0775 → 0,084). Con **m = 1** el valor no sobreajusta (Brier
+0,080 estable; 0,107 en las rondas 5–7 frente a 0,113 del control y 0,122 de v4; Noland 0,128 / 0,144 / 0,153) y la
+política mejora (KL 0,708, la mejor con la red de v4; reproducido en 3 semillas: 0,7083 / 0,7083 / 0,7081). En B con la
+red sola no se nota (+0,0), lo esperado: B solo usa la política. Con búsqueda (búsqueda legal de 256 con el modelo
+del rival de v4, 600 estados × 2 semillas): v4 87,4 %, control 87,8 %, m = 1 88,6 %; m = 1 − control +0,8 [−1,1,
++2,4], dirección coherente pero sin potencia. Nota: el valor de v4 en línea (Brier 0,092) es peor que cualquiera de
+los entrenados sin conexión, incluso el control (0,084).
+
+**E4, objetivos de búsqueda mejores** (mismas 171.938 posiciones; red y receta del control, 6 épocas, 3 semillas por
+variante; con tan pocos datos las redes rinden ~80 % en B, así que solo cuentan las diferencias):
+
+| objetivo | KL a su objetivo | KL al objetivo de 256 grabado | Brier | B % | Δ vs 256 `factory_sets` |
+|---|---|---|---|---|---|
+| 256, `factory_sets` (el grabado) | 0,920 | 0,920 | 0,091 | 79,6 | – |
+| 1.024, `factory_sets` | 1,103 | 0,937 | 0,091 | 80,1 | +0,4 [−0,2, +1,1] |
+| 256, modelo del rival aprendido | 0,916 | 0,926 | **0,086** | 80,1 | +0,5 [−0,1, +1,1] |
+
+Ni 4× más simulaciones ni el modelo aprendido dan un salto: +0,4 / +0,5 puntos, dentro del ruido. El modelo aprendido
+en la búsqueda de entrenamiento (punto 2 del combatiente en §26) **no empeora** el objetivo respecto a `factory_sets`
+(que lee la lista real) y su Q de raíz predice algo mejor el resultado (Brier 0,086 frente a 0,091).
+
+### 27.5 Advertencias
+
+- **Un solo paso de mejora.** Todas las redes destilan las búsquedas de **una** red (v4 it. 1111). Mejorar la
+  imitación de ese objetivo no garantiza que, en bucle (autojuego → búsqueda con la red nueva → objetivo nuevo), la
+  mejora se acumule o se mantenga; en particular el valor con m = 1 se entrena con la Q de una búsqueda que usa ese
+  mismo valor en las hojas (en línea podría reforzar sus propios errores; aquí la Q es de la búsqueda de v4, fija).
+- **B mide la política**, no el valor; el valor solo se juzga por el Brier apartado y por la prueba con búsqueda (sin
+  potencia).
+- **Ruido entre semillas** de ±0,5 puntos en B: las variantes de una sola semilla con |Δ| < 1 no son concluyentes.
+- **El control sin conexión ya supera a v4** (+0,9 [+0,1, +1,6]): parte puede ser la caída de la tasa (v4 it. 1111
+  aún no la había hecho, §25.6) y parte el entrenar con 3,2 M posiciones de una sola política en lugar de una ventana
+  pequeña.
+- E4 se hizo con 0,17 M posiciones (red débil); con muchos más datos un objetivo más limpio podría importar más o menos.
+
+### 27.6 Recomendación para v5
+
+1. **No hace falta una red más grande ni más profunda.** El cuello de botella no es la capacidad. Si se quiere algo de
+   anchura, d 256 (2 capas) da +0,6 / +1,0 puntos en B (con m = 1) a 1,6× de coste por pasada (no pasa del límite de
+   2×); 4+ capas no aportan y d 256 × 4 capas cuesta 2,5×: no.
+2. **Valor con m = 1 (Q de la raíz)** en lugar de 0,5: mejor valor (Brier 0,080 frente a 0,084–0,092, sobre todo en las
+   rondas 5–7 y Noland) y mejor política (KL −0,009), sin coste. Vigilar en línea el riesgo de auto-refuerzo (p. ej.
+   m = 0,8–0,9 como término medio, o empezar en 0,5 y subir).
+3. **Más datos por actualización, no más red**: lo que mueve la aguja es la cantidad de posiciones distintas. En v5,
+   una ventana de repetición mucho mayor (p. ej. 20–40 iteraciones = 0,8–1,6 M posiciones en lugar de 4) y más pasos
+   de entrenamiento por iteración (entrenar ocupa ~3 % de cada iteración; 20 épocas frente a 10 dio +0,7 en B). Coste
+   de inferencia: ninguno.
+4. El **modelo aprendido en la búsqueda de entrenamiento** (§26 punto 2) se puede adoptar: no empeora los objetivos.
+   Más simulaciones (1.024) no compensan su coste de 4×.
+5. Expectativa honesta: ninguno de estos cambios del combatiente, solo, da una mejora **grande** (los mejores, +1 a
+   +2 puntos por combate en B sobre v4). Para ver el conjunto, d 256 + m = 1 + ventana grande es la combinación que
+   indican los datos.
+
+### 27.7 Cómo repetirlo
+
+`runs/v5_offline/README.md` (todas las órdenes); `runs/v5_offline/CONTRACT.md` (la clave de repetición y la API
+`replay_positions`, que usa §27.y). Las redes y sus métricas por época: `runs/v5_offline/models/<nombre>/`
+(`metrics.json`); los registros de entrenamiento en `runs/v5_offline/logs/`. Las primeras pruebas con 0,6 M posiciones
+(`_pv_*`, un adelanto de los datos) mostraron lo mismo: con m = 1 el valor no sobreajusta y la red más grande sobreajusta
+antes.
+
+```bash
+python -m rl.offline_data record --out runs/v5_offline/main --workers 12 --hours 3
+python -m rl.offline_data consolidate --out runs/v5_offline/main
+python -m rl.offline_train --name control                       # d 128, 2 capas, 10 épocas, m 0,5
+python -m rl.offline_train --name w256vq --d 256 --heads 8 --value-mix 1
+python -m rl.offline_train --bench control,w256vq               # banco B (rl.agent_probe)
+python -m rl.offline_train --report "control=control+thr_ctrl_s1+thr_ctrl_s2,w256vq=w256vq+w256vq_s1"
+python -m pytest tests/python/test_offline_data.py
+```
+
+### 27.x Planificador mejorado (`rl/planner2.py`, medido como táctico, sin entrenar; 2026-10-04)
+
+Objetivo (§26): las sondas de §25 dicen que la red del táctico ya es su planificador (expectimax de profundidad 1,
+8 rivales sorteados, números aleatorios comunes, W como hoja), así que el techo del táctico es la calidad del
+planificador. Antes de decidir v5 se construye un planificador mejor, con cada mejora como **opción que se enciende
+por separado**, y se mide como táctico con las sondas C1, C2 y A de §25.
+
+#### 27.x.1 Definiciones (de abajo arriba)
+
+- **Planificador antiguo**: `rl.team_eval.plan_values` (§20.2.4), el de v3 / v4 (y del que salen los rasgos Q_plan
+  de sus redes).
+- **Muestreador de rivales del planificador**: de dónde salen los rivales sorteados del combate k (sus Pokémon son
+  los que podríamos coger en el cambio siguiente). **experience**: el modelo aprendido de las propias partidas (§22),
+  cubo de la ronda, sin especies ni objetos repetidos, sin las especies en pantalla y coherente con la pista oída
+  (muestreo por rechazo). **factory_sets**: la lista de sets de la Factory (información oculta; solo entrenamiento o
+  diagnóstico con `PYBATTLE_DIAGNOSTIC_PRIOR=factory_sets`).
+- **Ruido de muestreo**: con otra semilla se sortean otros rivales y Q_plan cambia un poco. Se mide con (1) la
+  **desviación típica entre semillas del Q_plan centrado** (Q − su media sobre las opciones: es lo que mueve el
+  máximo), (2) el **acuerdo entre semillas** (probabilidad de que dos semillas elijan lo mismo) y (3) el
+  **regret_ref** = valor de la mejor opción − el de la elegida, ambos según la misma variante con 256 rivales y
+  profundidad 1 (el planificador «convergido»): lo que cuesta el ruido según el propio planificador.
+- **Pista del combate siguiente** (`h=1`): en la pantalla de cambio el asistente ya ha dicho la pista del próximo
+  rival. El planificador antiguo valora el cambio futuro (tras ganar el combate k) con W sin pista: elige la
+  respuesta como si no fuera a saber nada más. Con `h=1`, por cada rival sorteado n del combate k se sortea también
+  el rival del combate k+1, se calcula su pista h'_n como el juego, y la respuesta se elige con p_{k+1} = W(· | h'_n).
+  Es «la media de los máximos» en vez de «el máximo de la media»: el planificador sabe que cuando cambie sabrá algo
+  más. Antes de Noland no hay pista (desconocida, como en el juego).
+- **Profundidad 2** (`d=2`): dos cambios por delante (ya existía en §20.2.4: haz de 3 respuestas, n2 = 4 rivales del
+  combate k+1 por rival del k; ahora, con `h=1`, esos rivales salen con la pista h'_n).
+- **Reglas de Noland** (comprobadas en el decomp, `FillFactoryBrainParty` / `GetFactoryMonFixedIV` /
+  `GetFrontierBrainStatus`, en `SimBackend.opponent_knowledge_for` y con pruebas contra el juego): aparece en los
+  combates 21 y 42 de la racha (combate 7 de las rondas 3 y 6) y después cada 21; sus sets salen del **mismo rango**
+  que los rivales normales de la ronda, sin especies ni objetos repetidos; **excluye sets, no especies**: los de los
+  6 Pokémon de la pantalla de cambio (nuestro equipo tras el cambio y el equipo derrotado; el que regalamos vuelve a
+  ser posible); todos sus IVs = `GetFactoryMonFixedIV(reto + 2)`: **15 en la ronda 3, 31 desde la 6** (los rivales
+  normales tienen 3 / 6). No da pista.
+- **Noland simulado** (`nol=mc`): solo en el cambio justo antes de Noland, p_7 de cada opción = victorias en 32
+  combates simulados (combatiente = la red del checkpoint, voraz) contra equipos de Noland sorteados del modelo de
+  experiencia con sus reglas (exclusión de las configuraciones de los 6 Pokémon en pantalla, IVs 15 / 31, EVs de
+  Pokémon entrenado: 252 en dos estadísticas, naturaleza del modelo), mezcladas con W: p = (8·W_Noland + victorias) /
+  (8 + 32). Mismos equipos y semillas para todas las opciones.
+- **Números aleatorios comunes (NAC)**: los mismos rivales sorteados (y semillas) para todas las opciones de una
+  decisión; con la misma semilla, el valor de una opción no depende de qué otras opciones se evalúen (probado).
+
+#### 27.x.2 Lo que estaba mal o flojo en el planificador antiguo (punto (d))
+
+1. **Regla de información**: el planificador antiguo sortea los rivales del combate k (y los Pokémon que podríamos
+   coger) de la **lista de sets de la Factory** (`DET.pool`, `SET_*`, `seen_set_mon`) **también en evaluación**, sin
+   pasar por `check_prior`. Eso afecta al planificador como táctico y a los rasgos Q_plan de las redes de v3 / v4 en
+   todas sus evaluaciones (§20.6, §22, §25). `planner2` usa por defecto el modelo de experiencia; con
+   `p=fs` reproduce el antiguo **exactamente** (mismas llamadas al generador; probado) y exige la marca de diagnóstico.
+   Medido: quitar la fuga no cuesta nada (E8 − antiguo, abajo: +0,1 / −0,5 puntos de P(6), dentro del ruido).
+2. **El valor de la pista futura se ignoraba** (arreglado con `h=1`, ver arriba).
+3. **Noland**: el planificador antiguo **nunca sortea a Noland**: solo sortea rivales para los combates k < 7 (tras el
+   combate 7 la ronda acaba y no hay cambio); Noland entra solo por la cabeza Noland de W, que se entrenó con combates
+   contra equipos generados con sus reglas exactas (`team_eval_data`: IVs de su fila, exclusión de sets). Así que la
+   premisa «sortea un entrenador normal en lugar de Noland» no se cumple. Comprobación: en 16 cambios previos a
+   Noland, la media de W_Noland sobre las opciones es 0,71 y la de 64 combates simulados contra Noland con los sets
+   reales (diagnóstico) 0,69: **W_Noland está calibrada**. Con el modelo de experiencia, los Noland simulados son más
+   débiles: 0,85 con EVs al azar (como el muestreador de la búsqueda) y 0,75 con EVs de Pokémon entrenado (los EVs y
+   naturalezas de los sets no los aprende el modelo).
+4. Menores: el sesgo del máximo en el nivel 1 (el máximo de 10 valores de W con ruido) favorece un poco a los equipos
+   con más opciones de cambio; `round_of` se fía del contador de combates de la racha (`run_ctx`), que vale 0 en una
+   racha que el simulador empieza a mitad de ronda (solo pasa en pruebas: las sondas empiezan en el primer combate).
+
+#### 27.x.3 Coste y ruido (`python -m rl.planner2_noise`, 40 alquileres + 60 cambios de C1, 4 semillas, 1 hilo, CPU con la máquina cargada)
+
+| variante | ms alquiler | ms cambio | desv. Q centrado (alq. / cambio) | acuerdo entre semillas | regret_ref (victorias) |
+|---|---|---|---|---|---|
+| antiguo (factory_sets, 8) | 68 | 24 | 0,081 / 0,062 | 0,84 / 0,97 | 0,003 / 0,000 |
+| E8 (experience, 8) | 68 | 25 | 0,082 / 0,058 | 0,83 / 0,98 | 0,004 / 0,000 |
+| n=16 | 131 | 45 | 0,059 / 0,042 | 0,82 / 0,98 | 0,004 / 0,000 |
+| n=32 | 269 | 85 | 0,039 / 0,032 | 0,92 / 0,99 | 0,002 / 0,000 |
+| n=64 | 576 | 172 | 0,029 / 0,021 | 0,96 / 0,99 | 0,000 / 0,000 |
+| n=32, h=1 | 662 | 187 | 0,043 / 0,035 | 0,88 / 0,99 | 0,002 / 0,000 |
+| n=64, h=1 | 1.289 | 394 | 0,031 / 0,025 | 0,97 / 0,99 | 0,000 / 0,000 |
+| d=2 (8 × 4) | 626 | 156 | 0,067 / 0,046 | 0,90 / 0,99 | (0,004 / 0,000)* |
+| n=16, h=1, d=2 | 1.417 | 380 | 0,054 / 0,044 | 0,89 / 0,98 | (0,005 / 0,002)* |
+
+\* respecto a la referencia de profundidad 1. `nol=mc`: +0,4–1,2 s (GPU) solo en el cambio previo a Noland (como
+mucho 2 por racha). El ruido baja como 1/√n (0,082 → 0,029 con 64 rivales) y el acuerdo sube de 0,83 a 0,96 en los
+alquileres, pero **el ruido casi no cuesta nada**: con 8 rivales el regret_ref es 0,004 victorias por alquiler y
+0 por cambio (las opciones entre las que duda valen casi lo mismo). En el juego cruzado: tiempo total del táctico
+en 3.072 rachas: antiguo / E8 ~610–650 s, n=32 h=1 2.500–4.500 s, n=16 h=1 d=2 9.600 s.
+
+#### 27.x.4 C1 y C2 (banco de §25; combatiente fijo = red de v3; W, v_next y modelo de v3 final)
+
+C1: acuerdo con el máximo del planificador antiguo (misma semilla) y Regret_Q bajo él. C2: P(completar la ronda)
+de la opción elegida (32 semillas emparejadas), diferencia emparejada con la elección del planificador antiguo y con
+la de la red de v3, y regret validado (puntos de P(completar), ± IC 95 %):
+
+| variante | acuerdo alq. / cambio | C2 valor | Δ vs antiguo | Δ vs red v3 | regret validado |
+|---|---|---|---|---|---|
+| antiguo | – | 61,3 | – | −0,0 ± 1,1 | +0,7 ± 2,1 |
+| E8 | 0,90 / 0,99 | 61,1 | −0,1 ± 0,7 | −0,2 ± 1,2 | +0,8 ± 2,1 |
+| n=32 | 0,90 / 0,99 | 61,5 | +0,2 ± 0,7 | +0,1 ± 1,1 | +0,5 ± 2,1 |
+| n=32, h=1 | 0,89 / 0,98 | 61,4 | +0,1 ± 0,7 | +0,1 ± 1,1 | +0,6 ± 2,1 |
+| n=64, h=1 | 0,91 / 0,99 | 61,3 | +0,0 ± 0,8 | −0,0 ± 1,1 | +0,7 ± 2,1 |
+| n=16, h=1, d=2 | 0,86 / 0,98 | 61,3 | +0,0 ± 0,8 | −0,0 ± 1,2 | +0,7 ± 2,1 |
+| n=32, h=1, nol=mc | 0,89 / 0,95 | 61,4 | +0,1 ± 1,2 | +0,1 ± 1,5 | +0,6 ± 2,3 |
+| p=fs, n=32, h=1 (diagnóstico) | 0,92 / 0,98 | 61,5 | +0,2 ± 0,7 | +0,1 ± 1,1 | +0,5 ± 2,1 |
+
+En los 25 cambios previos a Noland de C2, `nol=mc` elige distinto en 11 y la diferencia es 0,0 ± 5,9 puntos.
+**Todas las variantes eligen casi lo mismo** (86–92 % de los alquileres, 95–99 % de los cambios) y por el resultado
+real no se distinguen del antiguo ni de la red.
+
+#### 27.x.5 Juego cruzado A (512 rachas por ronda, semilla 777, combatiente = red del mismo checkpoint)
+
+P(completar) por ronda (%) y P(6) con IC *bootstrap*:
+
+| táctico | combatiente | R1 | R2 | R3 | R4 | R5 | R6 | P(6) |
+|---|---|---|---|---|---|---|---|---|
+| red v3 | v3 | 85,4 | 85,9 | 65,2 | 79,9 | 43,0 | 43,8 | 7,19 [6,0, 8,4] |
+| antiguo v3 | v3 | 88,3 | 86,7 | 63,7 | 79,9 | 41,8 | 40,2 | 6,55 [5,5, 7,7] |
+| E8 v3 | v3 | 86,9 | 87,1 | 63,5 | 81,4 | 42,2 | 40,4 | 6,68 |
+| n=32 h=1 v3 | v3 | 87,5 | 87,1 | 62,3 | 80,5 | 42,4 | 39,1 | 6,33 |
+| n=16 h=1 d=2 v3 | v3 | 87,7 | 88,5 | 63,7 | 81,1 | 43,8 | 40,8 | 7,15 [6,0, 8,4] |
+| p=fs n=32 h=1 v3 (diag.) | v3 | 88,5 | 87,1 | 63,7 | 80,7 | 43,6 | 39,5 | 6,80 |
+| red v4 (it. 1111) | v4 | 86,5 | 84,0 | 62,3 | 73,4 | 37,7 | 38,3 | 4,80 [4,0, 5,7] |
+| antiguo v4 | v4 | 82,8 | 82,6 | 64,6 | 78,7 | 42,0 | 35,2 | 5,14 [4,2, 6,1] |
+| E8 v4 | v4 | 82,0 | 82,0 | 62,5 | 78,9 | 40,4 | 35,0 | 4,69 |
+| n=32 h=1 v4 | v4 | 84,2 | 82,4 | 64,8 | 78,3 | 42,6 | 34,0 | 5,10 |
+| p=fs n=32 h=1 v4 (diag.) | v4 | 84,2 | 81,8 | 63,7 | 78,3 | 42,6 | 36,1 | 5,29 |
+
+Diferencias emparejadas (la racha i de la ronda k empieza igual para los dos tácticos): media de las 6 rondas de
+la diferencia de P(completar) (puntos) y diferencia de P(6) (puntos, IC *bootstrap* emparejado). `nol=mc` solo
+cambia el cambio previo a Noland, así que se jugó solo en las rondas 3 y 6 (el resto de rachas son idénticas a
+n=32 h=1); su «P(6)» es P(R3)·P(R6).
+
+| comparación | combatiente | media por ronda | Δ P(6) |
+|---|---|---|---|
+| E8 − antiguo (quitar la fuga de información) | v3 | +0,2 ± 0,9 | +0,13 [−0,49, +0,77] |
+| E8 − antiguo | v4 | −0,8 ± 0,9 | −0,45 [−0,94, +0,01] |
+| n=32 h=1 − antiguo | v3 | −0,3 ± 0,9 | −0,22 [−0,82, +0,36] |
+| n=32 h=1 − antiguo | v4 | +0,1 ± 0,9 | −0,04 [−0,54, +0,44] |
+| n=32 h=1 − E8 | v3 / v4 | −0,5 ± 0,9 / +0,9 ± 0,9 | −0,35 [−0,97, +0,26] / +0,41 [−0,05, +0,88] |
+| n=16 h=1 d=2 − antiguo | v3 | +0,8 ± 1,0 | +0,60 [−0,12, +1,36] |
+| n=16 h=1 d=2 − n=32 h=1 | v3 | +1,1 ± 0,9 | +0,82 [+0,18, +1,52] |
+| nol=mc − n=32 h=1 (R3, R6) | v3 / v4 | −1,5 ± 1,7 / −0,8 ± 1,8 | P(R3)·P(R6): −1,6 [−3,4, +0,1] / −0,6 [−2,2, +1,2] |
+| p=fs − n=32 h=1 (techo con la lista de sets) | v3 / v4 | +0,7 ± 0,7 / +0,1 ± 0,7 | +0,48 [−0,02, +0,98] / +0,19 [−0,26, +0,64] |
+| n=32 h=1 − red del táctico | v3 / v4 | −0,7 ± 1,8 / +0,7 ± 1,7 | −0,86 [−2,13, +0,42] / +0,30 [−0,65, +1,25] |
+
+#### 27.x.6 Lectura y recomendación para v5
+
+- **Ninguna mejora del planificador se nota como táctico.** Más rivales reducen el ruido como se espera
+  (1/√n), pero ese ruido ya costaba ~0 (regret_ref 0,004 victorias); la pista futura y la profundidad 2 cambian la
+  elección en ~10 % de los alquileres y ~1–2 % de los cambios, y ni C2 (32 semillas por opción) ni A (512 rachas)
+  distinguen el resultado. La profundidad 2 es la única con un signo consistente en A con v3 (+0,6 puntos de P(6),
+  IC [−0,1, +1,4]; +0,8 [+0,2, +1,5] frente a n=32 h=1, pero entre ~30 comparaciones una con IC que no toca el 0 es
+  esperable por azar, y en C2 da 0,0 ± 0,8): no hay evidencia suficiente para pagar 20× de coste.
+- **Noland simulado empeora o no cambia** (−1,6 / −0,6 puntos de P(R3)·P(R6)): el modelo de experiencia no conoce
+  los EVs ni las naturalezas de los sets y su Noland simulado es demasiado débil (0,75 frente a 0,69 de los sets
+  reales); W_Noland ya está calibrada. Se descarta.
+- **El techo con la lista de sets real** (p=fs) tampoco se separa (+0,5 / +0,2 puntos de P(6)): el muestreador no
+  es el cuello de botella.
+- Lo que sí hay que hacer: **quitar la fuga de información** (que el planificador y los rasgos Q_plan de la red usen
+  el modelo de experiencia, `planner2` E8 o n=16): coste igual y sin pérdida medible.
+- Conclusión para v5: con este W como hoja, el planificador ya está en su techo como táctico; mejorarlo (más
+  rivales, más profundidad, Noland) no mueve P(6). El táctico solo puede mejorar si mejora **W** (o se sustituye la
+  hoja por algo que dependa del rival concreto) o si mejora el **combatiente** (que es lo que fija los valores de
+  W). Recomendación: en v5, planificador `planner2` con el modelo de experiencia y 8–16 rivales (h=1 opcional, coste
+  ~2,5×), sin profundidad 2 ni Noland simulado, y poner el esfuerzo en el combatiente (§26 punto 1–2).
+
+#### 27.x.7 Uso y pruebas
+
+```bash
+python -m rl.agent_probe tactician --tactician "planner2:CKPT:n=32,h=1"          # C1 (opciones: n, d, n2, b, h, p=exp|fs, nol=w|mc, ns, nw)
+python -m rl.agent_probe outcomes  --tactician "planner2:CKPT:n=32,h=1"          # C2
+python -m rl.agent_probe crossplay --tactician "planner2:CKPT:n=32,h=1" --battler net:CKPT --a-runs 512
+python -m rl.planner2_noise                                                       # coste y ruido
+python -m rl.planner2_report                                                      # tablas (runs/probe/planner2/report.json)
+python -m pytest tests/python/test_planner2.py
+```
+`p=fs` necesita `PYBATTLE_DIAGNOSTIC_PRIOR=factory_sets`. Scripts de esta medida: `runs/probe/planner2/run_c.sh`,
+`run_a.sh`. Pruebas (15): calendario de Noland y sus IVs contra el juego (rondas 3 y 6; se lee el equipo real solo
+para comprobar la regla), exclusión de sets de la pantalla de cambio (el regalado vuelve a ser posible), los sorteos
+de Noland (sin especies / objetos repetidos, sin las configuraciones excluidas, su especie sí permitida; con la lista
+de sets, sin los ids excluidos), `factory_sets` exige la marca de diagnóstico, opciones (lectura / etiqueta), `p=fs`
+= planificador antiguo exacto, determinismo con la misma semilla, NAC (el valor de una opción no depende de las
+demás), profundidad 0 = Φ, profundidad 2 ≥ profundidad 1, `h=1` comprobado a mano con bucles y sin efecto con una W
+sin pista, el Noland simulado (determinista, IVs 15 en el combate reconstruido, mezcla con W) y la especificación
+del probe.
+
+### 27.y Rasgos de amenaza (`rl/threat_features.py`, 2026-10-04)
+
+Objetivo (§26, punto 1 del combatiente): dar a la red del combatiente, como **entrada**, lo que el modelo del rival
+aprendido de la experiencia (§22) cree sobre los Pokémon rivales, y medir sin conexión (con el conjunto de datos de
+§27) si así juega mejor. Motivo: en el banco B (§25) la búsqueda **perfecta** gana +4,5–5 puntos por combate a la red
+(conoce los sets del rival; el azar se vuelve a sortear, así que esa distancia es solo conocimiento de los sets),
+mientras que la búsqueda legal con el modelo aprendido no añade nada. Si la red recibe directamente "qué puede hacerme
+este rival", quizá aproveche parte de esa distancia sin búsqueda.
+
+#### 27.y.1 Definiciones (de abajo arriba)
+
+- **Configuración** de un rival (§22.1): (especie, sus 4 movimientos, objeto).
+- **Posterior** de un hueco rival: la probabilidad que el modelo de experiencia da a cada configuración posible de ese
+  hueco **dado lo visto** en el combate: especie (si ya salió), movimientos usados, objeto revelado, objetos revelados de
+  sus compañeros (no se repiten) y la ronda. Para un hueco **no visto** la especie también es incierta (las especies de
+  la ronda menos las ya vistas en el equipo).
+- **Átomo**: cada una de las opciones de esa mezcla. Hay dos clases:
+  - **conocido**: una configuración que el jugador ha visto entera alguna vez, con su probabilidad;
+  - **nuevo** (uno por especie): "una configuración que nunca he visto"; sus movimientos son los revelados más un
+    sorteo sin repetición entre los que la especie puede aprender (la regla estricta de §15). Sus rasgos se calculan
+    **exactamente** con fórmulas de combinatoria (hipergeométrica: probabilidad de que un sorteo de k movimientos entre
+    n contenga alguno de q dados = 1 − C(n−q, k)/C(n, k); esperanza del máximo de un sorteo), sin muestrear.
+- **Estadísticas típicas**: las del rival no se ven; se usa IV 15,5 y EV 85 (510/6) en cada estadística, y la
+  naturaleza de las observadas para esa configuración (uniforme para un átomo nuevo). Las nuestras son exactas.
+- **Fracción de daño**: daño de un movimiento (fórmula de Gen 3 con la tirada media 0,925, STAB, tabla de tipos,
+  habilidades y objetos; sin críticos, clima, pantallas ni cambios de estadísticas, que la red ya ve) dividido entre los
+  PS máximos del que lo recibe. Habilidades: las nuestras exactas; la del rival, la revelada o la media entre las
+  posibles de su especie (Potencia, Levitación…). Objetos: los nuestros; el del átomo (Cinta Elegida, potenciadores de
+  tipo, Hueso Grueso, Bola Luminosa); un átomo nuevo, sin objeto.
+- **Rasgos de un par** (rival j, nuestro i), 6 números, todos promediados sobre la posterior de j:
+  1. `p_se`: P(j tiene un ataque súper eficaz contra i);
+  2. `dmg_in`: esperanza del máximo, entre los movimientos de j, de la fracción de daño a i (tope 1,5);
+  3. `ko_in`: P(ese máximo ≥ la fracción de PS que le queda a i): "me puede tumbar de un golpe ya";
+  4. `faster`: P(j es más rápido que i) (+ la mitad de los empates), con la distribución de su velocidad sobre IVs 0–31
+     y EVs 0–252 y su naturaleza; incluye los cambios de velocidad y la parálisis de los dos activos;
+  5. `dmg_out`: esperanza del mejor daño de i a j (estadísticas típicas de j, su especie incierta si no se ha visto);
+  6. `ko_out`: P(ese daño ≥ la fracción de PS de j que muestra la barra; no visto: lleno).
+- **Rasgos de un hueco rival**: P(tiene algún movimiento de estado: dormir, envenenar, paralizar, quemar, confundir…),
+  P(de mejora: Danza Espada, Paz Mental…), P(de recuperación), P(ataque con prioridad), la **entropía** de su posterior
+  (cuánta incertidumbre queda, en nats/8) y la masa de los átomos nuevos (`p_novel`: cuánto cree el modelo que es algo
+  nunca visto).
+- **Disposición en la entrada** (18 números por cada token de Pokémon, N_THREAT = 18):
+  - nuestro Pokémon i: [par (rival activo, i), máximo elemento a elemento de los pares (otro rival vivo, i), 6 ceros];
+  - rival j (también los no vistos): [par (j, nuestro activo), máximo de los pares (j, otro nuestro vivo), sus 6 rasgos
+    de hueco];
+  - debilitados: ceros.
+- **ThreatNet**: la FactoryNet con esos 18 números añadidos a la entrada del codificador de Pokémon del combatiente: su
+  primera capa se ensancha con columnas a cero, así que cargada desde una FactoryNet calcula exactamente lo mismo hasta
+  que se entrena (test). El táctico no cambia.
+
+#### 27.y.2 Regla de información
+
+Las entradas son solo la `BattleView` (lo que ve el jugador), el número de ronda y el `ExperienceModel` (cuentas de lo
+que el jugador vio). Pruebas (`tests/python/test_threat_features.py`, 10 tests, pasan): (a) el código del módulo, sin
+comentarios, no nombra nada del estado verdadero ni de la lista de sets; (b) a lo largo de 4 combates aleatorios, en
+cada decisión con un hueco rival sin ver se reescribe en una copia lo que el jugador no ve (ids de sets y los Pokémon
+no vistos de `gEnemyParty`): las vistas son iguales y los rasgos, calculados por dos instancias con cachés frías,
+idénticos bit a bit; (c) la misma vista da lo mismo con caché fría y caliente; además, las fórmulas cerradas contra
+enumeración, la tabla de velocidades contra la fórmula, rangos y disposición, un movimiento súper eficaz revelado da
+`p_se` = 1, un modelo vacío da `p_novel` = 1, y la red (carga desde FactoryNet, ceros = sin rasgos, tronco compartido).
+
+#### 27.y.3 Coste
+
+Todo lo que no cambia dentro de un combate (posteriores, tablas de daño por par) se guarda en cachés indexadas por lo
+que sabe el jugador; cada decisión solo recalcula lo que depende de los PS y la velocidad. En las posiciones del
+conjunto de datos (1 hilo, máquina cargada): **2,3 ms de media por decisión** (mediana 1,5; p90 7; p99 11; la primera
+decisión de un combate y cada vez que se revela algo nuevo es la cara), **0,33 ms** si ya está todo en caché. Jugando
+el banco B con las redes entrenadas: 0,87–0,90 ms por decisión (el combate entero cuesta 2× el de la red sola).
+Con un modelo vacío (todo "nuevo") ~3 ms. Para comparar: la búsqueda de 256
+simulaciones cuesta ~200 ms por decisión, así que en la **raíz** el coste es despreciable; **en cada hoja** de la
+búsqueda (256 por decisión) sumaría 85–600 ms, demasiado: si se usa en la búsqueda, conviene fijar las posteriores con
+lo que se sabe en la raíz (es lo que sabe el jugador al decidir) y recalcular en las hojas solo la parte dinámica
+(~0,3 ms, o menos vectorizando por lotes). No implementado aún: v5 tendría que decidirlo.
+
+#### 27.y.4 ¿Predicen al rival verdadero? (diagnóstico; el rival verdadero solo se lee para puntuar)
+
+250 inicios de B jugados por la red de v3; en ~30 % de las decisiones, cada rival vivo frente a cada nuestro.
+**Brier** = media de (probabilidad − verdad)² (0 = perfecto; "constante" = predecir siempre la frecuencia media):
+
+| | experiencia | modelo vacío (estricto) | constante |
+|---|---|---|---|
+| `p_se` del rival activo (visto), n 2.146 | **0,036** | 0,117 | 0,222 |
+| P(estado), rivales vistos | **0,044** | 0,124 | 0,221 |
+| P(mejora), vistos | **0,036** | 0,094 | 0,217 |
+| P(recuperación), vistos | **0,027** | 0,120 | 0,213 |
+| P(estado / mejora / recuperación), **no vistos** | 0,216 / 0,189 / 0,166 | 0,215 / 0,193 / 0,177 | 0,214 / 0,189 / 0,165 |
+
+Para un rival que ya ha salido, el modelo sabe casi qué lleva (Brier 3–8 veces menor que el estricto); para uno que no
+ha salido no sabe más que la frecuencia media (la especie no se conoce).
+
+#### 27.y.5 Medida sin conexión (conjunto de datos de §27, banco B)
+
+Definiciones:
+- **Control** y **+amenaza**: la misma receta de `rl.offline_train` (§27: red de v4, 2 capas, d 128, desde cero, 10
+  épocas, lr 3·10⁻⁴ con calentamiento y coseno, lote 512, objetivos de la búsqueda Gumbel de v4), cambiando solo la
+  entrada: `--threat runs/v5_offline/threat` usa `ThreatNet` con los rasgos de cada fila. 654.339 parámetros frente a
+  652.035 (+2.304, la capa ensanchada). El control con semilla 0 es el `control` de §27 (mismos argumentos).
+- **Semilla de entrenamiento**: la inicialización y el orden de los lotes. Se entrenan 3 por brazo (0, 1, 2) y en B se
+  promedia, por estado, sobre las 3 redes de cada brazo antes de comparar (así la diferencia no depende de una
+  inicialización con suerte).
+- **Banco B** (§25): 1.779 inicios de combate × 4 semillas del combate, red voraz; mi ejecutor
+  (`python -m rl.threat_features bench`) reproduce exactamente los resultados de `rl.agent_probe battler` con la misma
+  red (150 de 150 combates idénticos con la red de v3). **Diferencia emparejada** por estado, IC 95 % *bootstrap* sobre
+  estados (2.000 remuestreos).
+
+Rasgos del conjunto de datos: 3.335.841 posiciones, calculadas mientras se grababa (`compute-shards`, 3 procesos,
+~1.050 posiciones/s en total incluida la repetición), unidas por fila con `assemble` (comprobado contra `run` / `li`).
+Modelo de experiencia: el de `runs/alphazero_v4/stopped_it1111.pt` (el del checkpoint que grabó los datos).
+
+**Conjunto completo (3,16 M filas de entrenamiento, 172.001 apartadas)**, final de la época 10, media de 3 semillas:
+
+| | KL apartada | top-1 | EV objetivo | EV z | Brier | KL Noland |
+|---|---|---|---|---|---|---|
+| control | 0,7172 | 0,580 | 0,446 | 0,244 | 0,0843 | 0,726 |
+| +amenaza | **0,7076** | 0,585 | 0,454 | 0,252 | 0,0834 | 0,717 |
+
+(EV = varianza explicada del valor; z = resultado real del combate.) La KL baja 0,010 en las 3 semillas (control
+0,7164 / 0,7177 / 0,7176; +amenaza 0,7070 / 0,7068 / 0,709).
+
+Banco B (victorias por combate, %; Δ emparejada +amenaza − control, puntos):
+
+| | total | R5 | R6 | R3 | Noland |
+|---|---|---|---|---|---|
+| control (3 semillas) | 88,8 [87,9, 89,7] | 87,5 | 89,4 | 96,2 | 78,6 |
+| +amenaza (3 semillas) | 89,0 [88,1, 89,8] | 87,9 | 89,1 | 96,6 | 79,7 |
+| **Δ** | **+0,21 [−0,29, +0,70]** | +0,40 [−0,40, +1,26] | −0,35 [−1,17, +0,47] | +0,44 [−0,28, +1,22] | +1,12 [−1,07, +3,17] |
+| Δ por semilla (0 / 1 / 2) | +0,49 / +0,25 / −0,13 | | | | |
+
+Ruido entre semillas del control: s1 − s0 = +0,46 [−0,39, +1,29], s2 − s0 = +0,32. Referencias en el mismo banco
+(§25.6): v3 final 89,0, v4 it. 899 87,5.
+
+**Piloto con pocos datos (las primeras 600 k posiciones: 569 k de entrenamiento, 4 épocas, 3 semillas):**
+
+| variante | KL apartada | B total | Δ vs control | Noland Δ |
+|---|---|---|---|---|
+| control | 0,834 | 83,3 | – | – |
+| +amenaza (los 18) | 0,808 | 85,5 | **+2,17 [+1,47, +2,83]** | +3,2 [+0,6, +5,5] |
+| solo pares (sin el bloque de hueco), 2 semillas | 0,812 | 85,0 | +1,59 [+0,82, +2,32] | +2,2 |
+| solo bloque de hueco, 2 semillas | 0,835 | 84,0 | +0,52 [−0,05, +1,12] | +1,1 |
+| rasgos con un modelo **vacío** (solo la regla estricta: daño y velocidad sin saber nada de los sets), 2 semillas | 0,826 | 84,8 | +1,34 [+0,60, +2,06] | +1,2 |
+
++amenaza − modelo vacío (2 semillas): +0,94 [+0,28, +1,59]: con pocos datos, la mitad de la ganancia es el cálculo de
+daño / velocidad y la otra mitad lo que el modelo de experiencia sabe de los sets.
+
+#### 27.y.6 Lectura y recomendación
+
+- Los rasgos son **correctos y baratos**: respetan la regla de información (probado), predicen bien lo oculto de un
+  rival ya visto (Brier 3–8× menor que la regla estricta) y cuestan ~1 ms por decisión en la raíz.
+- **Con pocos datos ayudan mucho** (+2,2 puntos por combate con 570 k posiciones, sobre todo Noland); **con el
+  conjunto completo casi nada**: +0,2 puntos [−0,3, +0,7] en B, y solo −0,010 de KL y +0,008 de EV. La red aprende
+  sola, de 3 M posiciones, casi todo lo que estos rasgos le dan masticado (los objetivos de la búsqueda de v4 ya se
+  calcularon con `factory_sets`, así que llevan implícito el conocimiento de los sets).
+- No cierran la distancia con la búsqueda perfecta (+4,5–5 puntos): esa distancia es saber el set **concreto** de
+  este rival, y para un rival visto la posterior ya es casi segura (Brier 0,04) y para uno no visto no sabe más que
+  la media. Lo que queda está en lo que no se puede saber antes de verlo, no en creencias mal usadas.
+- **Recomendación**: no hacerlos parte obligatoria de v5 por su efecto en B (no medible con el conjunto completo).
+  Sí son un candidato razonable si v5 arranca **desde cero** (las primeras iteraciones tienen pocos datos, que es
+  justo donde ayudan, y la red empieza igual que sin ellos gracias a las columnas a cero), con dos condiciones: (1)
+  calcularlos en la raíz y, si la búsqueda los necesita en las hojas, reutilizar las posteriores de la raíz y
+  recalcular solo la parte de PS / velocidad (~0,3 ms; sin eso serían +85–600 ms por decisión con 256 simulaciones);
+  (2) usar el modelo de experiencia del momento (el que también usaría la búsqueda, §26 punto 2). No se probó con una
+  red mayor: la de 4 capas de §27 no mejoró al control (KL 0,716).
+
+#### 27.y.7 Uso
+
+```bash
+python -m rl.threat_features compute-shards --watch --procs 3     # mientras se graba runs/v5_offline/main
+python -m rl.threat_features assemble                             # -> runs/v5_offline/threat/threat.npy (float16 [N, 6, 18])
+python -m rl.threat_features compute --data DIR --out OUT --model MODELO   # de una vez, sobre un conjunto ya consolidado
+python -m rl.offline_train --name thr_threat_s0 --threat runs/v5_offline/threat --epochs 10
+python -m rl.threat_features bench --ckpt runs/v5_offline/models/thr_threat_s0/final.pt --name main_threat_s0
+python -m rl.threat_features table --names "main_threat_s0+main_threat_s1+main_threat_s2" \
+    --ref "main_ctrl_s0+main_ctrl_s1+main_ctrl_s2"                # "a+b": media por estado de varias redes
+python -m pytest tests/python/test_threat_features.py
+```
+Resultados de B en `runs/v5_offline/threat/bench/`; modelos `runs/v5_offline/models/thr_*` (piloto: `thr_pilot_*`,
+datos del piloto en `runs/v5_offline/threat/pilot_data`). `rl.offline_train` solo ganó la opción `--threat` (las
+filas llevan `x["threat"]` y la red es `ThreatNet`); sin ella no cambia nada.

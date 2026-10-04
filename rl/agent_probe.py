@@ -125,13 +125,18 @@ def ckpt_info(ckpt):
 
 
 def parse_spec(spec):
-    """'kind:path[:sims]' -> (kind, path, sims)."""
+    """'kind:path[:sims]' -> (kind, path, sims). planner2:path[:options] -> (kind, path, options string)
+    (rl.planner2.parse_options, canonical)."""
     kind, rest = spec.split(":", 1)
     sims = None
+    if kind == "planner2":
+        from .planner2 import options_tag, parse_options
+        path, _, opts = rest.partition(":")
+        return kind, path, options_tag(parse_options(opts))
     if kind in ("search", "perfect") and ":" in rest and rest.rsplit(":", 1)[1].isdigit():
         rest, s = rest.rsplit(":", 1)
         sims = int(s)
-    if kind not in ("net", "planner", "search", "perfect"):
+    if kind not in ("net", "planner", "planner2", "search", "perfect"):
         raise ValueError(f"unknown agent kind {kind!r} in {spec!r}")
     if sims is None and kind in ("search", "perfect"):
         sims = 512 if kind == "search" else 2048
@@ -141,6 +146,9 @@ def parse_spec(spec):
 def spec_tag(spec):
     kind, path, sims = parse_spec(spec)
     t = ckpt_info(path)["tag"]
+    if kind == "planner2":
+        from .planner2 import file_tag
+        return f"planner2{'_' + file_tag(sims) if sims else ''}-{t}"
     return f"{kind}{sims if sims else ''}-{t}"
 
 
@@ -187,6 +195,16 @@ class Agents:
             self._hook[ckpt] = h
         return self._hook[ckpt]
 
+    def planner2(self, ckpt, opts):
+        """rl.planner2.Planner2Tactician of a checkpoint (its W, v_next, opponent model, battler network)."""
+        key = ("planner2", ckpt, opts)
+        if key not in self._search:
+            from .planner2 import Planner2Tactician, parse_options
+            cfg = parse_options(opts)
+            self._search[key] = Planner2Tactician(ckpt, cfg, self.hook(ckpt),
+                                                  self.evaluator(ckpt) if cfg.noland == "mc" else None)
+        return self._search[key]
+
     def search(self, ckpt, mode, sims, dets=8):
         key = (ckpt, mode, sims, dets)
         if key not in self._search:
@@ -231,8 +249,15 @@ def tactician_decide(agents, spec, be, seed, feats_cache=None):
     net: the network, greedy (rental: lead, then pair), with its own features; planner: argmax of its own Q_plan."""
     from . import encode
     from .tactician_features import to_action_space
-    kind_t, path, _ = parse_spec(spec)
+    kind_t, path, opts = parse_spec(spec)
     kind, obs, ctx = tactician_obs(be)
+    if kind_t == "planner2":                    # rl.planner2: argmax of its Q_plan (column Q_COL of feats)
+        from .tactician_search import options_of
+        options = options_of(kind, obs)
+        q, _ = agents.planner2(path, opts).q(be, kind, options, ctx, seed)
+        feats = np.zeros((len(options), Q_COL + 1), np.float32)
+        feats[:, Q_COL] = q / WIN_SCALE
+        return int(np.argmax(q)), options, feats
     if feats_cache is not None and path in feats_cache:
         options, feats = feats_cache[path]
     else:
@@ -788,9 +813,10 @@ def _flush_t(buf, c, p):
     buf.clear()
 
 
-def run_tactician(ckpt, procs=2, bench_name=BENCH_NAME):
-    """C1 for a checkpoint: its network's choice and the planner's (argmax of its own Q_plan), same features."""
-    specs = [f"net:{ckpt}", f"planner:{ckpt}"]
+def run_tactician(ckpt, procs=2, bench_name=BENCH_NAME, specs=None):
+    """C1 for a checkpoint: its network's choice and the planner's (argmax of its own Q_plan), same features (or
+    the given tactician specs, e.g. one planner2:)."""
+    specs = specs or [f"net:{ckpt}", f"planner:{ckpt}"]
     c = {"specs": specs, "bench": bench_name, "prefix": tactician_prefix(specs[0], bench_name)}
     t0 = time.time()
     stats = run_sharded(_tactician_job, c, procs)
@@ -1375,7 +1401,8 @@ def build_parser():
     p.add_argument("--c2-top", type=int, default=8, help="C2 rentals: the reference planner's top-k options")
     # agents
     p.add_argument("--battler", default=None, help="battler spec: net:CKPT | search:CKPT[:SIMS] | perfect:CKPT[:SIMS]")
-    p.add_argument("--tactician", default=None, help="tactician spec: net:CKPT | planner:CKPT")
+    p.add_argument("--tactician", default=None, help="tactician spec: net:CKPT | planner:CKPT | "
+                   "planner2:CKPT[:OPTIONS] (rl.planner2, e.g. n=32,h=1,d=2,nol=mc)")
     p.add_argument("--subset", type=int, default=None, help="battler: the first N states of a fixed order")
     p.add_argument("--seeds", type=int, default=None, help="battler: seeds per state (default --b-seeds)")
     p.add_argument("--a-runs", type=int, default=256, help="crossplay: runs per round")
@@ -1412,7 +1439,7 @@ def main(argv=None):
         return s
     if a.cmd == "tactician":
         kind, path, _ = parse_spec(a.tactician)
-        return run_tactician(path, a.procs, a.bench)
+        return run_tactician(path, a.procs, a.bench, [a.tactician] if kind == "planner2" else None)
     if a.cmd == "outcomes":
         specs = [a.tactician] if a.tactician else []
         return run_outcomes(specs, a.procs, a.c2_seeds, a.device, a.width, a.c2_top, a.bench)
