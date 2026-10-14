@@ -25,6 +25,7 @@
 #include "global.h"
 #include "battle.h"
 #include "battle_ai_switch_items.h"
+#include "battle_anim.h"
 #include "battle_controllers.h"
 #include "item.h"
 #include "main.h"

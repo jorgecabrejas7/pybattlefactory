@@ -1,9 +1,16 @@
 cmake_minimum_required(VERSION 3.16)
-project(pokemon_battle_simulator VERSION 1.0 LANGUAGES C CXX ASM)
+project(pokemon_battle_simulator VERSION 1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Web build (emscripten, scripts/build_wasm.sh): only the gen3 core and the web targets.
+if(EMSCRIPTEN)
+    set(BUILD_PYTHON_BINDINGS OFF CACHE BOOL "" FORCE)
+    set(BUILD_EMU_HOST OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTS OFF CACHE BOOL "" FORCE)
+endif()
 
 # Core simulator library
 add_library(battle_sim STATIC
@@ -38,11 +45,12 @@ add_library(gen3 STATIC
     src/gen3/game.cpp
     src/gen3/mcts.cpp
     src/gen3/search.cpp
+    src/web/factory_session.cpp
     src/gen3/generated/stubs.c
     src/gen3/generated/rom_script_tables.c
     src/gen3/generated/rom_layout_check.c
-    src/gen3/generated/rom_scripts.S
-    src/gen3/generated/rom_ram_map.S
+    src/gen3/generated/rom_scripts_data.c
+    src/gen3/generated/rom_ram_map.c
 )
 set_target_properties(gen3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_compile_definitions(gen3 PRIVATE GEN3_HOST)
@@ -51,10 +59,72 @@ target_compile_options(gen3 PRIVATE
     $<$<COMPILE_LANGUAGE:C>:-std=gnu17 -w -O2 -g -funsigned-char -fwrapv -fno-strict-aliasing -ftrivial-auto-var-init=zero>
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/third_party/pokeemerald/include>"
     "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/third_party/pokeemerald/src>"
-    "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/src>"
-    $<$<COMPILE_LANGUAGE:ASM>:-Wa,-I${CMAKE_SOURCE_DIR}/src/gen3/generated>)
-set_source_files_properties(src/gen3/generated/rom_scripts.S PROPERTIES
-    OBJECT_DEPENDS ${CMAKE_SOURCE_DIR}/src/gen3/generated/rom_scripts.bin)
+    "$<$<COMPILE_LANGUAGE:C>:SHELL:-iquote ${CMAKE_SOURCE_DIR}/src>")
+if(EMSCRIPTEN)
+    target_compile_options(gen3 PRIVATE -fwasm-exceptions)
+endif()
+
+# Determinism smoke test: native and wasm builds must print identical digests.
+option(BUILD_WEB_SMOKE "Build the gen3 determinism smoke test" ON)
+if(BUILD_WEB_SMOKE)
+    add_executable(gen3_smoke src/web/smoke_main.cpp)
+    target_link_libraries(gen3_smoke PRIVATE gen3)
+    if(EMSCRIPTEN)
+        target_compile_options(gen3_smoke PRIVATE -fwasm-exceptions)
+        target_link_options(gen3_smoke PRIVATE -fwasm-exceptions -sALLOW_MEMORY_GROWTH -sENVIRONMENT=node -sSTACK_SIZE=1MB)
+    endif()
+endif()
+
+# Browser build: the C API of src/web/web_api.cpp as an ES module + wasm (scripts/build_wasm.sh gen3_web)
+if(EMSCRIPTEN)
+    add_executable(gen3_web src/web/web_api.cpp)
+    target_link_libraries(gen3_web PRIVATE gen3)
+    target_compile_options(gen3_web PRIVATE -fwasm-exceptions)
+    set_target_properties(gen3_web PROPERTIES SUFFIX ".mjs")
+    target_link_options(gen3_web PRIVATE -fwasm-exceptions -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createGen3
+        -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=1MB -sFILESYSTEM=0
+        "-sEXPORTED_FUNCTIONS=_malloc,_free"
+        "-sEXPORTED_RUNTIME_METHODS=UTF8ToString,HEAPU8,HEAP32,HEAPF32")
+endif()
+
+# The real game for the browser: libmgba + emu/web/gba_web.cpp (scripts/build_wasm.sh gba_web)
+if(EMSCRIPTEN)
+    include(FetchContent)
+    FetchContent_Declare(
+        mgba
+        GIT_REPOSITORY https://github.com/mgba-emu/mgba.git
+        GIT_TAG        0.10.2
+        GIT_SHALLOW    TRUE
+    )
+    set(LIBMGBA_ONLY ON CACHE BOOL "" FORCE)
+    set(M_CORE_GB OFF CACHE BOOL "" FORCE)
+    set(ENABLE_SCRIPTING OFF CACHE BOOL "" FORCE)
+    set(USE_LUA OFF CACHE BOOL "" FORCE)
+    set(USE_ELF OFF CACHE BOOL "" FORCE)
+    set(USE_LZMA OFF CACHE BOOL "" FORCE)
+    set(USE_ZLIB OFF CACHE BOOL "" FORCE)
+    set(USE_PNG OFF CACHE BOOL "" FORCE)
+    set(USE_SQLITE3 OFF CACHE BOOL "" FORCE)
+    set(USE_EPOXY OFF CACHE STRING "" FORCE)
+    set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+    set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+    FetchContent_GetProperties(mgba)
+    if(NOT mgba_POPULATED)
+        FetchContent_Populate(mgba)
+        set(_c_flags "${CMAKE_C_FLAGS}")
+        string(APPEND CMAKE_C_FLAGS " -D_GNU_SOURCE")          # mGBA only adds it for Linux
+        add_subdirectory(${mgba_SOURCE_DIR} ${mgba_BINARY_DIR} EXCLUDE_FROM_ALL)
+        set(CMAKE_C_FLAGS "${_c_flags}")
+    endif()
+    add_executable(gba_web emu/web/gba_web.cpp)
+    target_link_libraries(gba_web PRIVATE mgba)
+    set_target_properties(gba_web PROPERTIES SUFFIX ".mjs")
+    target_link_options(gba_web PRIVATE -O3 -sMODULARIZE -sEXPORT_ES6 -sEXPORT_NAME=createGba
+        -sENVIRONMENT=web,worker,node -sALLOW_MEMORY_GROWTH -sSTACK_SIZE=1MB -sFILESYSTEM=0
+        "-sEXPORTED_FUNCTIONS=_malloc,_free"
+        "-sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAP16,HEAP32")
+endif()
+
 if(MSVC)
     target_compile_options(battle_sim PRIVATE /W3 /O2)
 else()
@@ -72,7 +142,8 @@ if(BUILD_PYTHON_BINDINGS)
     )
     FetchContent_MakeAvailable(pybind11)
 
-    pybind11_add_module(pybattle_native src/python/bindings.cpp src/python/search_bindings.cpp src/python/observer_bindings.cpp)
+    pybind11_add_module(pybattle_native src/python/bindings.cpp src/python/search_bindings.cpp src/python/observer_bindings.cpp
+        src/python/web_bindings.cpp)
     target_link_libraries(pybattle_native PRIVATE battle_sim gen3)
     if(NOT MSVC)
         target_link_options(pybattle_native PRIVATE -static-libgcc -static-libstdc++)

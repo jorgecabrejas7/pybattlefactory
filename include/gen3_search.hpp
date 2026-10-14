@@ -136,6 +136,28 @@ SearchStats runGumbelSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx
                             const bool rootLegal[7], float rootValue, const float gumbel[7],
                             const SearchConfig& cfg, const BatchEvaluator& evaluator);
 
+// runSearch as resumable steps (the browser awaits its network between rounds):
+//   SearchSession s(roots, ctx, rootP, legal, rootV, cfg);
+//   while ((n = s.prepare()) >= 0) { evaluate s.observations()[0..n) -> priors [n*7], values [n]; s.submit(...); }
+//   s.stats()
+// Same trees as runSearch for the same evaluator.
+class SearchSession {
+public:
+    SearchSession(std::vector<SearchRoot> roots, const EncodeCtx& ctx, const float rootPriors[7],
+                  const bool rootLegal[7], float rootValue, const SearchConfig& cfg);
+    ~SearchSession();
+    int prepare();                                 // observations to evaluate, or -1 when the search is over
+    const EncodedObs* observations() const;
+    void submit(const float* priors, const float* values);
+    bool finished() const;
+    const SearchStats& stats() const;              // final (after prepare() returned -1)
+    SearchStats current() const;                   // root visits / Q so far
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> m;
+};
+
 // Simulations per surviving action in each phase of sequential halving over m actions.
 std::vector<int> halvingPlan(int m, int nSims);
 

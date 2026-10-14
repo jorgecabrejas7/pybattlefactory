@@ -13,7 +13,13 @@ u16 Random(void)
     gRngValue = ISO_RANDOMIZE1(gRngValue);
     sRandCount++;
 #ifdef GEN3_HOST
-    { extern void (*gGen3RandomHook)(void *); if (gGen3RandomHook) gGen3RandomHook(__builtin_return_address(0)); }
+    { extern void (*gGen3RandomHook)(void *); if (gGen3RandomHook) gGen3RandomHook(
+#ifdef __EMSCRIPTEN__
+        0
+#else
+        __builtin_return_address(0)
+#endif
+    ); }
 #endif
     return gRngValue >> 16;
 }

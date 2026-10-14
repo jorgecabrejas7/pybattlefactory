@@ -1793,6 +1793,17 @@ int encode_version() { return g_encode_version; }
 
 int encode_mon_num(int version) { return version >= 4 ? MON_NUM_V4 : MON_NUM_V3; }
 
+void estimate_battle(const ObsView& view, const EncodeCtx& ctx, int version, BattleEstimates& out) {
+    Estimates es;
+    battle_estimates(view, ctx, version, es);
+    static_assert(sizeof es.own == sizeof out.own && sizeof es.foe == sizeof out.foe, "estimates layout");
+    std::memcpy(out.own, es.own, sizeof out.own);
+    out.n_foe = es.n_foe;
+    std::memcpy(out.foe, es.foe, sizeof out.foe);
+    std::memcpy(out.threat, es.threat, sizeof out.threat);
+    std::memcpy(out.speed, es.speed, sizeof out.speed);
+}
+
 void encode_view(const ObsView& v, const EncodeCtx& ctx, EncodedObs& out) {
     const int version = g_encode_version, mon_w = encode_mon_num(version);
     out.mon_w = mon_w;

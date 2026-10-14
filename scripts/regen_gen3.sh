@@ -15,10 +15,10 @@ trap 'rm -rf "$WORK"' EXIT
 CF=(-std=gnu17 -O0 -w -DGEN3_HOST -funsigned-char -fPIC
     -iquote "$REPO/third_party/pokeemerald/include" -iquote "$REPO/third_party/pokeemerald/src" -iquote "$REPO/src")
 : > "$REPO/src/gen3/generated/stubs.c"
-for f in "$REPO"/third_party/pokeemerald/src/*.c "$REPO/src/gen3/host.c" "$REPO/src/gen3/factory_run.c" "$REPO/src/gen3/generated/rom_script_tables.c"; do
+for f in "$REPO"/third_party/pokeemerald/src/*.c "$REPO/src/gen3/host.c" "$REPO/src/gen3/factory_run.c" \
+         "$REPO"/src/gen3/generated/{rom_script_tables,rom_scripts_data,rom_ram_map}.c; do
     gcc "${CF[@]}" -c "$f" -o "$WORK/$(basename "$f" .c).o"
 done
-(cd "$REPO/src/gen3/generated" && gcc -c rom_scripts.S -o "$WORK/rom_scripts.o" && gcc -c rom_ram_map.S -o "$WORK/rom_ram_map.o")
 ld -r "$WORK"/*.o -o "$WORK/all.o"
 nm -u "$WORK/all.o" | awk '{print $2}' | sort > "$WORK/undefined.txt"
 python3 "$REPO/scripts/gen_stubs.py" "$WORK/undefined.txt"

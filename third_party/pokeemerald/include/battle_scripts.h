@@ -223,4 +223,8 @@ extern const u8 BattleScript_ActionWatchesCarefully[];
 extern const u8 BattleScript_ActionGetNear[];
 extern const u8 BattleScript_ActionThrowPokeblock[];
 
+#ifdef GEN3_HOST
+#include "gen3/generated/rom_script_labels.h"
+#endif
+
 #endif // GUARD_BATTLE_SCRIPTS_H

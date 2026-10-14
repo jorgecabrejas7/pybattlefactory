@@ -99,6 +99,10 @@ int Gen3Factory_RunBattle(uint32_t maxFrames);
 // log (diagnostics: rl/autopsy.py); it never changes the battle.
 extern void (*gGen3MessageHook)(uint16_t stringId, uint8_t active, uint8_t attacker, uint8_t target,
                                 uint8_t effectBattler, uint16_t move);
+// From inside gGen3MessageHook: the message's text as the game buffers it (game encoding, EOS-terminated);
+// the battle state is left untouched. Returns the length.
+void *Gen3_ResolveAddress(uint32_t gbaAddress);   // host pointer of a GBA RAM / script address
+int Gen3_BattleMessageText(uint16_t stringId, uint8_t *out, int cap);
 void Gen3_TraceRandom(int enable);   // log every Random() caller to stderr   // callbacks and controller state to stderr
 
 #ifdef __cplusplus

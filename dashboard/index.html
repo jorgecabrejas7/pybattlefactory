@@ -1,0 +1,795 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<meta name="theme-color" content="#0c0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Factory Training</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0c0d10; --surface: #15171c; --surface-2: #1c1f26; --line: #252932;
+    --text: #eceae4; --muted: #8d909b; --faint: #5b5f6b;
+    --accent: #f2a65a; --teal: #5cc8b8; --lilac: #b59cf0;
+    --good: #5cc890; --bad: #ef6461; --ref: #a7a9b3;
+    --mono: "JetBrains Mono", ui-monospace, monospace;
+    --tabbar-h: 64px; --appbar-h: 56px;
+    --safe-b: env(safe-area-inset-bottom, 0px); --safe-t: env(safe-area-inset-top, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { background: var(--bg); }
+  body {
+    margin: 0; color: var(--text); background: var(--bg);
+    font: 15px/1.45 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background-image:
+      radial-gradient(1200px 500px at 85% -10%, rgba(242,166,90,.07), transparent 60%),
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 .035 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    background-attachment: fixed;
+    min-height: 100dvh;
+  }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  a { color: var(--accent); text-decoration: none; }
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+
+  /* ---------- app bar ---------- */
+  .appbar {
+    position: sticky; top: 0; z-index: 20; padding-top: var(--safe-t);
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .appbar-in { height: var(--appbar-h); max-width: 1180px; margin: 0 auto; padding: 0 16px;
+               display: flex; align-items: center; gap: 12px; }
+  .run-btn { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; text-align: left; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; background: var(--faint); }
+  .dot.alive { background: var(--good); box-shadow: 0 0 0 4px rgba(92,200,144,.16); animation: pulse 2.4s infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 7px rgba(92,200,144,.04); } }
+  .run-btn .t { min-width: 0; }
+  .run-btn .name { font-weight: 600; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run-btn .sub { font-size: 12px; color: var(--muted); }
+  .run-btn svg { flex: none; color: var(--muted); }
+  .icon-btn { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; color: var(--muted);
+              border: 1px solid var(--line); background: var(--surface); }
+  .icon-btn:active { transform: scale(.96); }
+  .icon-btn.spin svg { animation: spin .8s linear; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---------- layout ---------- */
+  main { max-width: 1180px; margin: 0 auto; padding: 16px 16px calc(var(--tabbar-h) + var(--safe-b) + 28px); }
+  .view { display: none; }
+  .view.on { display: block; animation: rise .22s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .h-sec { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 26px 2px 10px; }
+  .h-sec h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .h-sec .aside { font-size: 12px; color: var(--faint); text-align: right; }
+  .view > .h-sec:first-child { margin-top: 4px; }
+
+  .grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
+  @media (min-width: 760px) { .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (min-width: 1100px) { .grid.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 18px; }
+
+  /* ---------- hero ---------- */
+  .hero { padding: 18px 18px 16px; position: relative; overflow: hidden; }
+  .hero::after { content: ""; position: absolute; right: -60px; top: -60px; width: 220px; height: 220px; border-radius: 50%;
+                 border: 1px dashed rgba(242,166,90,.18); pointer-events: none; }
+  .hero::before { content: ""; position: absolute; right: -20px; top: -20px; width: 140px; height: 140px; border-radius: 50%;
+                  border: 1px solid rgba(242,166,90,.10); pointer-events: none; }
+  .hero .label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .08em; }
+  .hero .big { font-size: 44px; font-weight: 600; line-height: 1.05; margin: 6px 0 2px; }
+  .hero .big small { font-size: 20px; color: var(--muted); font-weight: 500; }
+  .hero .vs { font-size: 13px; color: var(--muted); }
+  .delta.up { color: var(--good); } .delta.down { color: var(--bad); }
+  .progress { margin-top: 16px; }
+  .progress .bar { height: 6px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+  .progress .bar i { display: block; height: 100%; border-radius: inherit;
+                     background: linear-gradient(90deg, #c77d3a, var(--accent)); }
+  .progress .row { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 7px; }
+  .stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line);
+           border-top: 1px solid var(--line); overflow: hidden; margin: 16px -18px -16px; }
+  @media (min-width: 620px) { .stats { grid-template-columns: repeat(4, 1fr); } }
+  .stats > div { background: var(--surface); padding: 12px 18px; }
+  .stats .k { font-size: 12px; color: var(--muted); }
+  .stats .v { font-size: 18px; margin-top: 2px; }
+  .stats .v.stale { color: var(--bad); }
+
+  /* ---------- round bars ---------- */
+  .rounds { padding: 6px 16px; }
+  .rrow { display: grid; grid-template-columns: 58px 1fr 64px; gap: 12px; align-items: center; padding: 11px 0;
+          border-bottom: 1px solid var(--line); }
+  .rrow:last-child { border-bottom: 0; }
+  .rrow .rn { font-size: 13px; color: var(--muted); }
+  .rrow .track { position: relative; height: 10px; border-radius: 99px; background: var(--surface-2); }
+  .rrow .fill { position: absolute; inset: 0 auto 0 0; border-radius: 99px; background: var(--accent); }
+  .rrow .fill.beat { background: var(--good); }
+  .rrow .tick { position: absolute; top: -5px; bottom: -5px; width: 2px; background: var(--ref); border-radius: 2px; }
+  .rrow .val { text-align: right; font-size: 15px; }
+  .rrow .val small { display: block; font-size: 11px; }
+  .legend-note { font-size: 12px; color: var(--faint); padding: 8px 2px 0; display: flex; gap: 14px; flex-wrap: wrap; }
+  .legend-note i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+
+  /* ---------- chart cards ---------- */
+  .chart-card { padding: 12px 12px 8px; min-width: 0; }
+  .chart-card header { display: flex; align-items: flex-start; gap: 8px; margin: 2px 2px 6px; }
+  .chart-card h3 { margin: 0; font-size: 14px; font-weight: 600; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .chart-card h3 .last { display: block; font-weight: 500; font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .chart-card .zoom { width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center;
+                      color: var(--muted); background: var(--surface-2); flex: none; }
+  .chart-card .box { position: relative; height: 230px; }
+  @media (min-width: 760px) { .chart-card .box { height: 210px; } }
+  .chart-card.tall .box { height: 280px; }
+  .empty { padding: 28px 16px; text-align: center; color: var(--faint); font-size: 14px; }
+
+  /* ---------- toolbar ---------- */
+  .toolbar { position: sticky; top: calc(var(--appbar-h) + var(--safe-t)); z-index: 10; margin: -16px -16px 4px;
+             padding: 10px 16px; display: flex; gap: 10px; overflow-x: auto; scrollbar-width: none;
+             background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px);
+             -webkit-backdrop-filter: blur(10px); }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 3px; flex: none; }
+  .seg button { padding: 6px 11px; border-radius: 9px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .seg button.on { background: var(--surface-2); color: var(--text); box-shadow: inset 0 0 0 1px var(--line); }
+  .seg .lbl { padding: 6px 4px 6px 8px; font-size: 12px; color: var(--faint); align-self: center; }
+
+  /* ---------- scalars (TensorBoard mirror) ---------- */
+  .search { display: flex; gap: 8px; align-items: center; background: var(--surface); border: 1px solid var(--line);
+            border-radius: 14px; padding: 0 12px; height: 46px; }
+  .search input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text); font: inherit; font-size: 16px; }
+  .search svg { color: var(--faint); flex: none; }
+  .chips { display: flex; gap: 8px; overflow-x: auto; padding: 12px 0 2px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { flex: none; padding: 7px 12px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface);
+          font-size: 13px; color: var(--muted); display: inline-flex; gap: 7px; align-items: center; }
+  .chip i { width: 8px; height: 8px; border-radius: 50%; }
+  .chip.on { color: var(--text); border-color: color-mix(in srgb, var(--chip) 55%, var(--line)); background: color-mix(in srgb, var(--chip) 12%, var(--surface)); }
+  .group { margin-top: 12px; }
+  .group > button { width: 100%; display: flex; align-items: center; gap: 10px; padding: 14px 16px; text-align: left; }
+  .group > button .gname { font-weight: 600; flex: 1; overflow-wrap: anywhere; }
+  .group > button .count { font-size: 12px; color: var(--muted); background: var(--surface-2); padding: 2px 8px; border-radius: 99px; }
+  .group > button svg { color: var(--muted); transition: transform .2s; flex: none; }
+  .group.open > button svg { transform: rotate(90deg); }
+  .group .grid { padding: 0 12px 12px; display: none; }
+  .group.open .grid { display: grid; }
+  .group .chart-card { background: var(--bg); }
+  .tb-link { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 12px; color: var(--text); }
+  .tb-link .t { flex: 1; } .tb-link .t b { display: block; font-weight: 600; } .tb-link .t span { font-size: 13px; color: var(--muted); }
+
+  /* ---------- log ---------- */
+  pre.log { margin: 0; padding: 14px; font: 11.5px/1.55 var(--mono); color: var(--muted); overflow-x: auto; white-space: pre; }
+  .links { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .links a { padding: 14px 10px; text-align: center; font-size: 13px; font-weight: 500; color: var(--text); }
+  .links a span { display: block; color: var(--muted); font-weight: 400; font-size: 12px; }
+
+  /* ---------- tab bar ---------- */
+  .tabbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; padding-bottom: var(--safe-b);
+            background: color-mix(in srgb, var(--surface) 88%, transparent); backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px); border-top: 1px solid var(--line); }
+  .tabbar-in { max-width: 560px; margin: 0 auto; height: var(--tabbar-h); display: grid; grid-template-columns: repeat(5, 1fr); }
+  .tab { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+         font-size: 11px; font-weight: 500; color: var(--faint); position: relative; }
+  .tab svg { width: 23px; height: 23px; }
+  .tab.on { color: var(--text); }
+  .tab.on svg { color: var(--accent); }
+  .tab.on::before { content: ""; position: absolute; top: 0; width: 26px; height: 2px; border-radius: 0 0 2px 2px; background: var(--accent); }
+
+  /* ---------- sheet + zoom ---------- */
+  .scrim { position: fixed; inset: 0; z-index: 40; background: rgba(0,0,0,.55); opacity: 0; pointer-events: none; transition: opacity .2s; }
+  .scrim.on { opacity: 1; pointer-events: auto; }
+  .sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; max-width: 560px; margin: 0 auto;
+           background: var(--surface); border: 1px solid var(--line); border-bottom: 0; border-radius: 22px 22px 0 0;
+           padding: 8px 12px calc(16px + var(--safe-b)); transform: translateY(105%); transition: transform .26s cubic-bezier(.2,.8,.2,1);
+           max-height: 75dvh; overflow-y: auto; }
+  .sheet.on { transform: none; }
+  .sheet .grab { width: 38px; height: 4px; border-radius: 99px; background: var(--line); margin: 4px auto 12px; }
+  .sheet h4 { margin: 0 8px 8px; font-size: 13px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .08em; }
+  .run-opt { width: 100%; display: flex; align-items: center; gap: 12px; padding: 14px 10px; border-radius: 14px; text-align: left; }
+  .run-opt.on { background: var(--surface-2); }
+  .run-opt .t { flex: 1; } .run-opt .t b { display: block; font-weight: 600; } .run-opt .t span { font-size: 12px; color: var(--muted); }
+  .zoomview { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: none; flex-direction: column;
+              padding: calc(10px + var(--safe-t)) 12px calc(12px + var(--safe-b)); }
+  .zoomview.on { display: flex; }
+  .zoomview header { display: flex; align-items: center; gap: 10px; padding: 0 4px 10px; }
+  .zoomview header h3 { flex: 1; margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+  .zoomview .box { flex: 1; position: relative; min-height: 0; }
+  .zoomview .hint { font-size: 12px; color: var(--faint); text-align: center; padding-top: 8px; }
+  .foot { text-align: center; font-size: 12px; color: var(--faint); margin-top: 28px; }
+  .foot .bad { color: var(--bad); }
+</style>
+</head>
+<body>
+
+<div class="appbar"><div class="appbar-in">
+  <button class="run-btn" id="runBtn" aria-label="Choose run">
+    <span class="dot" id="runDot"></span>
+    <span class="t"><div class="name" id="runName">Loading…</div><div class="sub" id="runSub">&nbsp;</div></span>
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M7 10l5 5 5-5"/></svg>
+  </button>
+  <button class="icon-btn" id="refresh" aria-label="Refresh">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg>
+  </button>
+</div></div>
+
+<main>
+  <!-- OVERVIEW -->
+  <section class="view" data-view="overview">
+    <div class="card hero" id="hero"></div>
+    <div class="h-sec"><h2>Rounds completed</h2><span class="aside">MA 5 · eval, network only</span></div>
+    <div class="card rounds" id="roundBars"></div>
+    <div class="legend-note"><span><i style="background:var(--good)"></i>ahead of PPO v3</span><span><i style="background:var(--accent)"></i>behind</span><span><i style="background:var(--ref);width:3px"></i>PPO v3</span></div>
+    <div class="h-sec"><h2>Full challenge</h2><span class="aside">P(6 rounds)</span></div>
+    <div class="grid" id="ovCharts"></div>
+    <div class="h-sec"><h2>Latest log</h2></div>
+    <div class="card"><pre class="log" id="log"></pre></div>
+    <div class="links">
+      <a class="card" href="tb/">TensorBoard<span>full UI</span></a>
+      <a class="card" href="files/">Files<span>logs, configs</span></a>
+      <a class="card" href="oauth2/sign_out">Sign out<span>Google</span></a>
+    </div>
+    <div class="foot" id="foot"></div>
+  </section>
+
+  <!-- ROUNDS -->
+  <section class="view" data-view="rounds">
+    <div class="toolbar" data-toolbar></div>
+    <div class="h-sec"><h2>P(complete round)</h2><span class="aside">dotted: PPO v3</span></div>
+    <div class="grid g3" id="roundCharts"></div>
+    <div id="searchWrap">
+      <div class="h-sec"><h2>With search</h2><span class="aside">eval_search_round_k</span></div>
+      <div class="grid g3" id="searchCharts"></div>
+    </div>
+    <div class="h-sec"><h2>Battle win rate by round</h2></div>
+    <div class="grid" id="bwrCharts"></div>
+  </section>
+
+  <!-- TRAINING -->
+  <section class="view" data-view="training">
+    <div class="toolbar" data-toolbar></div>
+    <div class="h-sec"><h2>Losses</h2></div>
+    <div class="grid g3" id="lossCharts"></div>
+    <div class="h-sec"><h2>Explained variance</h2></div>
+    <div class="grid g3" id="evCharts"></div>
+    <div class="h-sec"><h2>Entropy & KL to search</h2></div>
+    <div class="grid g3" id="klCharts"></div>
+    <div class="h-sec"><h2>Schedule & throughput</h2></div>
+    <div class="grid g3" id="lrCharts"></div>
+  </section>
+
+  <!-- SEARCH -->
+  <section class="view" data-view="search">
+    <div class="toolbar" data-toolbar></div>
+    <div class="h-sec"><h2>Battler search</h2></div>
+    <div class="grid g3" id="bsCharts"></div>
+    <div class="h-sec"><h2>Tactician search</h2></div>
+    <div class="grid g3" id="tsCharts"></div>
+  </section>
+
+  <!-- SCALARS: TensorBoard mirror -->
+  <section class="view" data-view="scalars">
+    <div class="toolbar" data-toolbar></div>
+    <a class="card tb-link" href="tb/">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"><path d="M3 17l5-6 4 4 8-9"/><path d="M14 6h6v6"/></svg>
+      <span class="t"><b>Open TensorBoard</b><span>Full UI. Below: every scalar, grouped like TensorBoard.</span></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--muted)" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+    </a>
+    <label class="search">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+      <input id="tagFilter" type="search" placeholder="Filter tags (regex)" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <div class="chips" id="runChips"></div>
+    <div id="groups"></div>
+  </section>
+</main>
+
+<nav class="tabbar"><div class="tabbar-in" id="tabs">
+  <button class="tab" data-tab="overview"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 12l4.5-3"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/></svg>Overview</button>
+  <button class="tab" data-tab="rounds"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 20V10M10 20V6M15 20v-8M20 20V4"/></svg>Rounds</button>
+  <button class="tab" data-tab="training"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5c4 0 5 12 9 12s5-6 9-6"/><path d="M3 20h18"/></svg>Training</button>
+  <button class="tab" data-tab="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><path d="M12 7v9M11 7l-4.5 9M13 7l4.5 9"/></svg>Search</button>
+  <button class="tab" data-tab="scalars"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg>Scalars</button>
+</div></nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet" id="sheet" role="dialog" aria-label="Runs"><div class="grab"></div><h4>Runs</h4><div id="runList"></div></div>
+<div class="zoomview" id="zoom">
+  <header>
+    <h3 id="zoomTitle"></h3>
+    <button class="icon-btn" id="zoomClose" aria-label="Close"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+  </header>
+  <div class="box"><canvas id="zoomCanvas"></canvas></div>
+  <div class="hint">Tap or drag on the chart to read values · rotate the phone for more room</div>
+</div>
+
+<script>
+/* ================= constants & state ================= */
+const PPO_V3 = [67.0, 71.0, 41.2, 59.5, 20.7, 18.0];
+const PPO_V3_ALL6 = PPO_V3.reduce((a, v) => a * v / 100, 1) * 100;
+const C = { accent: "#f2a65a", teal: "#5cc8b8", lilac: "#b59cf0", rose: "#ee7d9b", sky: "#6fb3ef", lime: "#b6d36b",
+            good: "#5cc890", ref: "#a7a9b3" };
+const PALETTE = [C.accent, C.teal, C.lilac, C.rose, C.sky, C.lime];
+const AGENTS = [["battler", "Battler", C.accent], ["tactician_rental", "Rental", C.teal], ["tactician_swap", "Swap", C.lilac]];
+const STALE_MIN = 10;
+
+const store = {
+  get(k, d = null) { try { const v = localStorage.getItem("rl:" + k); return v == null ? d : v; } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem("rl:" + k, v); } catch (e) {} },
+};
+function storedJSON(k, d) { try { return JSON.parse(store.get(k, d)); } catch (e) { return JSON.parse(d); } }
+const state = {
+  data: null, run: null,
+  tab: (location.hash.slice(1) || store.get("tab", "overview")),
+  smooth: store.get("smooth", "ma5"), range: store.get("range", "all"),
+  compare: new Set(storedJSON("compare", "[]")),
+  filter: store.get("filter", ""), openGroups: new Set(storedJSON("groups", '["eval_round_1"]')),
+};
+
+/* ================= helpers ================= */
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtStep = v => Math.abs(v) >= 1e9 ? (v / 1e9).toFixed(1) + "B" : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(Math.abs(v) >= 1e7 ? 0 : 1) + "M"
+                   : Math.abs(v) >= 1e3 ? (v / 1e3).toFixed(0) + "k" : String(Math.round(v));
+function fmtVal(v) {
+  if (v == null || !isFinite(v)) return "–";
+  const a = Math.abs(v);
+  if (a === 0) return "0";
+  if (a >= 1e5) return fmtStep(v);
+  if (a >= 100) return v.toFixed(0);
+  if (a >= 1) return v.toFixed(2);
+  if (a >= 1e-3) return v.toFixed(4);
+  return v.toExponential(1);
+}
+function fmtDur(s) {
+  if (s == null || !isFinite(s)) return "–";
+  s = Math.max(0, s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : m ? `${m}m` : `${Math.floor(s)}s`;
+}
+const runByName = n => state.data && state.data.runs.find(r => r.name === n);
+const S = (tag, run = state.run) => (run && run.scalars[tag]) || null;
+const last = pts => pts && pts.length ? pts[pts.length - 1][1] : null;
+
+function movingAvg(pts, n) {
+  const out = [], q = []; let sum = 0, cnt = 0;
+  for (const [x, y] of pts) {
+    q.push(y); if (y != null) { sum += y; cnt++; }
+    if (q.length > n) { const o = q.shift(); if (o != null) { sum -= o; cnt--; } }
+    out.push([x, cnt ? sum / cnt : null]);
+  }
+  return out;
+}
+const smoothN = () => ({ off: 0, ma5: 5, ma20: 20 }[state.smooth] || 0);
+const ma5 = pts => last(movingAvg(pts, 5));
+
+function rangeFilter(pts) {
+  if (state.range === "all" || !pts.length) return pts;
+  const x0 = pts[0][0], x1 = pts[pts.length - 1][0];
+  const cut = x1 - (x1 - x0) * (state.range === "half" ? 0.5 : 0.2);
+  return pts.filter(p => p[0] >= cut);
+}
+
+function roundsProduct(run = state.run) {
+  const series = [1, 2, 3, 4, 5, 6].map(k => S(`eval_round_${k}/complete`, run));
+  if (series.some(s => !s)) return null;
+  const maps = series.map(s => new Map(s));
+  return series[0].filter(([st]) => maps.every(m => m.get(st) != null))
+                  .map(([st]) => [st, maps.reduce((a, m) => a * m.get(st), 1)]);
+}
+
+/* ================= charts ================= */
+Chart.defaults.color = "#8d909b";
+Chart.defaults.borderColor = "#252932";
+Chart.defaults.font.family = "Inter, system-ui, sans-serif";
+Chart.defaults.font.size = 11;
+Chart.defaults.animation = false;
+
+const live = new Map();      // canvas -> Chart
+let zoomChart = null;
+
+/* spec: { title, lines: [{pts, label, color}], k (value scale), yMin, yMax, pct, ref: [{v, label}] } */
+function buildDatasets(spec, forZoom) {
+  const k = spec.k || 1, n = smoothN(), ds = [], xs = [];
+  const toXY = p => ({ x: p[0], y: p[1] == null ? null : p[1] * k });
+  for (const l of spec.lines) {
+    if (!l.pts || !l.pts.length) continue;
+    const pts = rangeFilter(l.pts);
+    if (!pts.length) continue;
+    xs.push(pts[0][0], pts[pts.length - 1][0]);
+    if (n) {
+      ds.push({ label: l.label + " (raw)", data: pts.map(toXY), borderColor: l.color + "38", borderWidth: 1, raw: true });
+      ds.push({ label: l.label, data: movingAvg(pts, n).map(toXY), borderColor: l.color, borderWidth: forZoom ? 2.4 : 2 });
+    } else {
+      ds.push({ label: l.label, data: pts.map(toXY), borderColor: l.color, borderWidth: forZoom ? 2.2 : 1.8 });
+    }
+  }
+  if (!ds.length) return null;
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  for (const r of spec.ref || [])
+    ds.push({ label: r.label, data: [{ x: x0, y: r.v }, { x: x1, y: r.v }], borderColor: C.ref, borderDash: [3, 4], borderWidth: 1.3 });
+  return { ds, x0, x1 };
+}
+
+function chartConfig(spec, built, forZoom) {
+  const named = built.ds.filter(d => !d.raw);
+  return {
+    type: "line",
+    data: { datasets: built.ds },
+    options: {
+      responsive: true, maintainAspectRatio: false, parsing: false, normalized: true, spanGaps: true,
+      interaction: { mode: "nearest", axis: "x", intersect: false },
+      elements: { point: { radius: 0, hitRadius: 8, hoverRadius: 4 }, line: { tension: 0 } },
+      layout: { padding: { right: 4 } },
+      plugins: {
+        legend: { display: named.length > 1, position: "bottom", align: "start",
+                  labels: { boxWidth: 12, boxHeight: 2, padding: forZoom ? 14 : 10, color: "#aeb0b8",
+                            font: { size: forZoom ? 13 : 11 }, filter: it => !built.ds[it.datasetIndex].raw } },
+        tooltip: {
+          backgroundColor: "#1c1f26", borderColor: "#2f3440", borderWidth: 1, padding: 10, titleColor: "#eceae4",
+          bodyColor: "#c9cbd2", bodyFont: { family: "JetBrains Mono, monospace", size: 12 }, boxWidth: 8, boxHeight: 8,
+          filter: it => !built.ds[it.datasetIndex].raw,
+          callbacks: {
+            title: it => "step " + fmtStep(it[0].parsed.x),
+            label: it => ` ${it.dataset.label}: ${fmtVal(it.parsed.y)}${spec.pct ? "%" : ""}`,
+          },
+        },
+      },
+      scales: {
+        x: { type: "linear", min: built.x0, max: built.x1, grid: { display: false },
+             ticks: { callback: fmtStep, maxTicksLimit: forZoom ? 8 : 5, maxRotation: 0 } },
+        y: { min: spec.yMin, max: spec.yMax, grid: { color: "#1f2229" },
+             ticks: { maxTicksLimit: forZoom ? 8 : 5, callback(v, i, ticks) {
+               return Chart.Ticks.formatters.numeric.call(this, v, i, ticks) + (spec.pct ? "%" : ""); } } },
+      },
+    },
+  };
+}
+
+function lastLabel(spec) {
+  const l = spec.lines.find(l => l.pts && l.pts.length);
+  if (!l) return "";
+  const v = smoothN() ? last(movingAvg(l.pts, smoothN())) : last(l.pts);
+  return v == null ? "" : `${spec.lines.length > 1 ? l.label + " " : ""}${fmtVal(v * (spec.k || 1))}${spec.pct ? "%" : ""}`;
+}
+
+// Charts are drawn only when scrolled near the viewport (the Scalars tab can hold 100+).
+const observer = new IntersectionObserver(entries => {
+  for (const e of entries) {
+    if (!e.isIntersecting) continue;
+    observer.unobserve(e.target);
+    const canvas = e.target.querySelector("canvas");
+    const built = buildDatasets(e.target._spec, false);
+    if (!built) { e.target.querySelector(".box").innerHTML = `<div class="empty">No data in range</div>`; continue; }
+    live.set(canvas, new Chart(canvas, chartConfig(e.target._spec, built, false)));
+  }
+}, { rootMargin: "300px 0px" });
+
+function chartCard(container, spec, cls = "") {
+  const card = document.createElement("div");
+  card.className = "card chart-card " + cls;
+  card.innerHTML = `<header><h3>${esc(spec.title)}<span class="last num">${esc(lastLabel(spec))}</span></h3>
+    <button class="zoom" aria-label="Expand chart"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg></button></header>
+    <div class="box"><canvas></canvas></div>`;
+  card.querySelector(".zoom").addEventListener("click", () => openZoom(spec));
+  card._spec = spec;
+  container.appendChild(card);
+  observer.observe(card);
+  return card;
+}
+
+function clearCharts(root) {
+  for (const [canvas, ch] of live) if (root.contains(canvas)) { ch.destroy(); live.delete(canvas); }
+  root.querySelectorAll(".chart-card").forEach(c => observer.unobserve(c));
+}
+function resetEl(sel) { const el = $(sel); clearCharts(el); el.innerHTML = ""; return el; }
+
+let zoomSpec = null;
+function drawZoom() {
+  if (zoomChart) { zoomChart.destroy(); zoomChart = null; }
+  const built = zoomSpec && buildDatasets(zoomSpec, true);
+  if (built) zoomChart = new Chart($("#zoomCanvas"), chartConfig(zoomSpec, built, true));
+}
+function openZoom(spec) {
+  zoomSpec = spec;
+  $("#zoomTitle").textContent = spec.title;
+  $("#zoom").classList.add("on");
+  drawZoom();
+  history.pushState({ overlay: 1 }, "");
+}
+function closeZoom() {
+  zoomSpec = null;
+  $("#zoom").classList.remove("on");
+  if (zoomChart) { zoomChart.destroy(); zoomChart = null; }
+}
+$("#zoomClose").addEventListener("click", () => history.back());
+window.addEventListener("popstate", () => { closeZoom(); closeSheet(); });
+
+/* spec shorthands */
+const line = (tag, label, color, run = state.run) => ({ pts: S(tag, run), label, color });
+const agentLines = suffix => AGENTS.map(([a, l, c]) => line(`${a}/${suffix}`, l, c));
+const has = spec => spec.lines.some(l => l.pts && l.pts.length);
+function addCharts(el, specs, cls) {
+  let n = 0;
+  for (const s of specs) if (has(s)) { chartCard(el, s, cls); n++; }
+  if (!n) el.innerHTML = `<div class="card empty">Nothing logged for this run.</div>`;
+  return n;
+}
+
+/* ================= views ================= */
+function renderOverview() {
+  const r = state.run, now = Date.now() / 1000;
+  const it = r.iteration, planned = r.iterations_planned;
+  const hours = last(S("perf/hours"));
+  const elapsed = hours != null ? hours * 3600 : (r.last_update && r.first_update ? r.last_update - r.first_update : null);
+  let eta = null;
+  const its = S("perf/iteration_seconds");
+  if (r.alive && its && it != null && planned) {
+    const recent = its.slice(-5).map(p => p[1]).filter(v => v != null);
+    eta = (planned - it - 1) * recent.reduce((a, v) => a + v, 0) / recent.length;
+  }
+  const dps = last(S("perf/battler_decisions_per_s")) ?? last(S("perf/battler_steps_per_s"));
+  const age = r.last_update ? now - r.last_update : null;
+  const stale = age == null || age > STALE_MIN * 60;
+  const prod = roundsProduct();
+  const p6 = prod && prod.length ? 100 * ma5(prod) : null;
+  const d6 = p6 != null ? p6 - PPO_V3_ALL6 : null;
+  const pct = it != null && planned ? Math.min(100, (it + 1) / planned * 100) : null;
+
+  $("#hero").innerHTML = `
+    <div class="label">P(complete all 6 rounds) · MA 5</div>
+    <div class="big num">${p6 != null ? p6.toFixed(2) : "–"}<small>%</small></div>
+    <div class="vs">PPO v3 ${PPO_V3_ALL6.toFixed(2)}%${d6 != null ? ` · <span class="delta ${d6 >= 0 ? "up" : "down"}">${d6 >= 0 ? "+" : ""}${d6.toFixed(2)} pts</span>` : ""}</div>
+    ${pct != null ? `<div class="progress"><div class="bar"><i style="width:${pct}%"></i></div>
+      <div class="row"><span>Iteration <b class="num">${it}</b> / ${planned}</span><span>${r.alive ? "ETA " + fmtDur(eta) : "stopped"}</span></div></div>` : ""}
+    <div class="stats">
+      <div><div class="k">Status</div><div class="v" style="color:${r.alive ? "var(--good)" : "var(--muted)"}">${r.alive ? "Running" : "Not running"}</div></div>
+      <div><div class="k">Elapsed</div><div class="v num">${fmtDur(elapsed)}</div></div>
+      <div><div class="k">Decisions / s</div><div class="v num">${dps != null ? Math.round(dps).toLocaleString() : "–"}</div></div>
+      <div><div class="k">Last update</div><div class="v num ${stale ? "stale" : ""}">${age != null ? fmtDur(age) + " ago" : "–"}</div></div>
+    </div>`;
+
+  const rows = [];
+  for (let k = 1; k <= 6; k++) {
+    const pts = S(`eval_round_${k}/complete`);
+    const v = pts ? 100 * ma5(pts) : null, ref = PPO_V3[k - 1];
+    rows.push(`<div class="rrow"><span class="rn">Round ${k}</span>
+      <div class="track">${v != null ? `<div class="fill ${v >= ref ? "beat" : ""}" style="width:${v}%"></div>` : ""}<div class="tick" style="left:calc(${ref}% - 1px)"></div></div>
+      <span class="val num">${v != null ? v.toFixed(1) + "%" : "–"}<small class="delta ${v >= ref ? "up" : "down"}">${v != null ? (v >= ref ? "+" : "") + (v - ref).toFixed(1) : ""}</small></span></div>`);
+  }
+  $("#roundBars").innerHTML = rows.join("");
+
+  addCharts(resetEl("#ovCharts"), [
+    { title: "P(6 rounds)", lines: [{ pts: prod, label: "all 6", color: C.good }], k: 100, pct: true, yMin: 0,
+      ref: [{ v: PPO_V3_ALL6, label: "PPO v3" }] },
+    { title: "Self-play battle win rate", lines: [line("train/battle_win_rate", "win rate", C.teal)] }], "tall");
+
+  $("#log").textContent = (r.log_tail || []).slice(-8).join("\n") || "(no log file)";
+  const gen = state.data.generated ? now - state.data.generated : null;
+  $("#foot").innerHTML = `Exported ${gen != null ? fmtDur(gen) + " ago" : "?"} · refreshes every 60 s` +
+    (gen != null && gen > STALE_MIN * 60 ? ` · <span class="bad">exporter stale</span>` : "");
+}
+
+function renderRounds() {
+  const specs = [1, 2, 3, 4, 5, 6].map(k => ({ title: `Round ${k}`, lines: [line(`eval_round_${k}/complete`, "net", C.accent)],
+    k: 100, pct: true, yMin: 0, yMax: 100, ref: [{ v: PPO_V3[k - 1], label: "PPO v3" }] }));
+  specs.push({ title: "P(6 rounds)", lines: [{ pts: roundsProduct(), label: "all 6", color: C.good }], k: 100, pct: true, yMin: 0,
+               ref: [{ v: PPO_V3_ALL6, label: "PPO v3" }] });
+  addCharts(resetEl("#roundCharts"), specs);
+
+  const sEl = resetEl("#searchCharts");
+  const sSpecs = [1, 2, 3, 4, 5, 6].map(k => ({ title: `Round ${k} · search`, lines: [line(`eval_search_round_${k}/complete`, "search", C.lilac),
+    line(`eval_round_${k}/complete`, "net", C.accent)], k: 100, pct: true, yMin: 0, yMax: 100, ref: [{ v: PPO_V3[k - 1], label: "PPO v3" }] }))
+    .filter(s => s.lines[0].pts);
+  $("#searchWrap").style.display = sSpecs.length ? "" : "none";
+  if (sSpecs.length) addCharts(sEl, sSpecs);
+
+  addCharts(resetEl("#bwrCharts"), [{ title: "Battle win rate, per round", k: 100, pct: true,
+    lines: [1, 2, 3, 4, 5, 6].map(k => line(`eval_round_${k}/battle_win_rate`, "R" + k, PALETTE[k - 1])) }], "tall");
+}
+
+function renderTraining() {
+  const dps = S("perf/battler_decisions_per_s") ? "perf/battler_decisions_per_s" : "perf/battler_steps_per_s";
+  const sections = [
+    ["#lossCharts", [
+      { title: "Policy cross-entropy", lines: agentLines("policy_loss") },
+      { title: "Value loss", lines: agentLines("value_loss") },
+      { title: "Total loss", lines: [line("train/loss", "loss", C.sky)] },
+      { title: "Grad norm", lines: [line("train/grad_norm", "grad norm", C.sky)] },
+    ]],
+    ["#evCharts", [
+      { title: "Explained variance · held-out", lines: agentLines("explained_variance_heldout") },
+      { title: "Explained variance · held-out vs z", lines: agentLines("explained_variance_heldout_z") },
+      { title: "Explained variance · train", lines: agentLines("explained_variance_train") },
+    ]],
+    ["#klCharts", [
+      { title: "Policy entropy", lines: agentLines("entropy") },
+      { title: "KL(search ‖ net) · train", lines: agentLines("kl_to_search") },
+      { title: "KL(search ‖ net) · held-out", lines: agentLines("kl_to_search_heldout") },
+    ]],
+    ["#lrCharts", [
+      { title: "Learning rate", lines: [line("train/lr", "lr", C.accent)] },
+      { title: "Battler decisions / s", yMin: 0, lines: [line(dps, "dec/s", C.good)] },
+      { title: "Seconds per iteration", yMin: 0, lines: [line("perf/iteration_seconds", "total", C.accent), line("perf/selfplay_seconds", "self-play", C.teal),
+        line("perf/eval_seconds", "eval", C.lilac), line("perf/train_seconds", "train", C.lime)] },
+    ]],
+  ];
+  for (const [sel, specs] of sections) addCharts(resetEl(sel), specs);
+}
+
+function renderSearch() {
+  addCharts(resetEl("#bsCharts"), [
+    { title: "Root Q vs net value", lines: [line("search/root_q", "root Q", C.accent), line("search/root_value_net", "net V", C.teal)] },
+    { title: "Search changed the argmax", lines: [line("search/argmax_changed_frac", "changed", C.accent), line("search/searched_frac", "searched", C.teal)] },
+    { title: "Visit entropy", lines: [line("search/visit_entropy", "entropy", C.lilac)] },
+    { title: "Leaves per decision", lines: [line("search/leaves_per_decision", "leaves", C.sky)] },
+    { title: "Depth", lines: [line("search/mean_depth", "mean", C.accent), line("search/max_depth", "max", C.teal)] },
+    { title: "ms per decision", lines: [line("search/ms_per_decision", "battler", C.accent)] },
+  ]);
+  addCharts(resetEl("#tsCharts"), [
+    { title: "Search value vs net", lines: [line("tsearch/value", "search", C.accent), line("tsearch/value_net", "net", C.teal)] },
+    { title: "Chose the prior's argmax", lines: [line("tsearch/chosen_is_prior_argmax", "frac", C.lilac)] },
+    { title: "Simulations per decision", lines: [line("tsearch/sims_per_decision", "sims", C.sky), line("tsearch/net_calls_per_decision", "net calls", C.lime)] },
+    { title: "ms per decision", lines: [line("tsearch/ms_per_decision", "tactician", C.teal)] },
+    { title: "Swap / switch fraction", lines: [line("actions/tactician_swap_frac", "swap", C.rose), line("actions/battler_switch_frac", "battler switch", C.sky)] },
+  ]);
+}
+
+function renderScalars() {
+  // Run chips: the selected run is always shown; tap others to overlay them (like TensorBoard's run list).
+  const runs = state.data.runs, others = runs.filter(r => r.name !== state.run.name);
+  const colorOf = name => name === state.run.name ? C.accent : PALETTE[1 + others.findIndex(r => r.name === name) % 5];
+  $("#runChips").innerHTML = runs.map(r => {
+    const on = r.name === state.run.name || state.compare.has(r.name);
+    return `<button class="chip ${on ? "on" : ""}" data-run="${esc(r.name)}" style="--chip:${colorOf(r.name)}"><i style="background:${colorOf(r.name)}"></i>${esc(r.name)}</button>`;
+  }).join("");
+  const shown = [state.run, ...others.filter(r => state.compare.has(r.name))];
+
+  let re = null;
+  try { re = state.filter ? new RegExp(state.filter, "i") : null; } catch (e) { re = null; }
+  const tags = [...new Set(shown.flatMap(r => Object.keys(r.scalars)))].filter(t => !re || re.test(t)).sort();
+  const groups = new Map();
+  for (const t of tags) {
+    const g = t.includes("/") ? t.slice(0, t.indexOf("/")) : "(root)";
+    if (!groups.has(g)) groups.set(g, []);
+    groups.get(g).push(t);
+  }
+
+  const root = resetEl("#groups");
+  if (!tags.length) { root.innerHTML = `<div class="card empty" style="margin-top:12px">No tags match.</div>`; return; }
+  for (const [g, list] of groups) {
+    const open = state.openGroups.has(g) || (re && groups.size <= 3);
+    const box = document.createElement("div");
+    box.className = "card group" + (open ? " open" : "");
+    box.innerHTML = `<button><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 6l6 6-6 6"/></svg>
+      <span class="gname">${esc(g)}</span><span class="count num">${list.length}</span></button><div class="grid g3"></div>`;
+    const grid = box.querySelector(".grid");
+    const fill = () => {
+      for (const t of list)
+        chartCard(grid, { title: g === "(root)" ? t : t.slice(g.length + 1),
+                          lines: shown.map(r => ({ pts: S(t, r), label: r.name, color: colorOf(r.name) })) });
+    };
+    box.querySelector("button").addEventListener("click", () => {
+      const nowOpen = box.classList.toggle("open");
+      nowOpen ? state.openGroups.add(g) : state.openGroups.delete(g);
+      store.set("groups", JSON.stringify([...state.openGroups]));
+      clearCharts(grid); grid.innerHTML = "";
+      if (nowOpen) fill();
+    });
+    root.appendChild(box);
+    if (open) fill();
+  }
+}
+$("#runChips").addEventListener("click", e => {
+  const b = e.target.closest(".chip"); if (!b || b.dataset.run === state.run.name) return;
+  state.compare.has(b.dataset.run) ? state.compare.delete(b.dataset.run) : state.compare.add(b.dataset.run);
+  store.set("compare", JSON.stringify([...state.compare]));
+  renderScalars();
+});
+let filterTimer;
+$("#tagFilter").value = state.filter;
+$("#tagFilter").addEventListener("input", e => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => { state.filter = e.target.value.trim(); store.set("filter", state.filter); renderScalars(); }, 250);
+});
+
+/* ================= toolbar (smoothing / range) ================= */
+function renderToolbars() {
+  const seg = (name, lbl, opts) => `<div class="seg" data-seg="${name}"><span class="lbl">${lbl}</span>${
+    opts.map(([v, t]) => `<button data-v="${v}" class="${state[name] === v ? "on" : ""}">${t}</button>`).join("")}</div>`;
+  const html = seg("smooth", "Smooth", [["off", "Off"], ["ma5", "MA 5"], ["ma20", "MA 20"]]) +
+               seg("range", "Range", [["all", "All"], ["half", "Last ½"], ["fifth", "Last ⅕"]]);
+  document.querySelectorAll("[data-toolbar]").forEach(t => t.innerHTML = html);
+}
+document.addEventListener("click", e => {
+  const b = e.target.closest(".seg button"); if (!b) return;
+  const name = b.closest(".seg").dataset.seg;
+  state[name] = b.dataset.v; store.set(name, b.dataset.v);
+  renderToolbars(); renderView();
+});
+
+/* ================= run sheet ================= */
+function openSheet() {
+  const now = Date.now() / 1000;
+  $("#runList").innerHTML = state.data.runs.map(r => {
+    const age = r.last_update ? fmtDur(now - r.last_update) + " ago" : "";
+    const it = r.iteration != null ? `it ${r.iteration}${r.iterations_planned ? "/" + r.iterations_planned : ""} · ` : "";
+    return `<button class="run-opt ${r.name === state.run.name ? "on" : ""}" data-run="${esc(r.name)}"><span class="dot ${r.alive ? "alive" : ""}"></span>
+      <span class="t"><b>${esc(r.name)}</b><span>${it}${r.alive ? "running · " : ""}${age}</span></span></button>`;
+  }).join("");
+  $("#sheet").classList.add("on"); $("#scrim").classList.add("on");
+  history.pushState({ overlay: 1 }, "");
+}
+function closeSheet() { $("#sheet").classList.remove("on"); $("#scrim").classList.remove("on"); }
+$("#runBtn").addEventListener("click", () => state.data && openSheet());
+$("#scrim").addEventListener("click", () => history.back());
+$("#runList").addEventListener("click", e => {
+  const b = e.target.closest(".run-opt"); if (!b) return;
+  store.set("run", b.dataset.run); state.compare.delete(b.dataset.run);
+  history.back(); render();
+});
+
+/* ================= tabs ================= */
+const VIEWS = { overview: renderOverview, rounds: renderRounds, training: renderTraining, search: renderSearch, scalars: renderScalars };
+function setTab(t) {
+  if (!VIEWS[t]) t = "overview";
+  state.tab = t; store.set("tab", t); history.replaceState(history.state, "", "#" + t);
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === t));
+  document.querySelectorAll(".view").forEach(v => {
+    const on = v.dataset.view === t;
+    if (!on) clearCharts(v);
+    v.classList.toggle("on", on);
+  });
+  window.scrollTo({ top: 0 });
+  renderView();
+}
+$("#tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b) setTab(b.dataset.tab); });
+function renderView() {
+  if (!state.run) return;
+  const y = window.scrollY;
+  VIEWS[state.tab]();
+  window.scrollTo({ top: y });   // periodic refreshes keep the reading position
+  if (zoomSpec) drawZoom();
+}
+
+/* ================= data ================= */
+function render() {
+  const d = state.data;
+  if (!d || !d.runs.length) { $("#runName").textContent = "No runs exported yet"; return; }
+  state.run = runByName(store.get("run")) || d.runs[0];
+  const r = state.run;
+  $("#runName").textContent = r.name;
+  $("#runDot").className = "dot" + (r.alive ? " alive" : "");
+  const age = r.last_update ? Date.now() / 1000 - r.last_update : null;
+  $("#runSub").textContent = (r.alive ? "running" : "not running") + (r.iteration != null ? ` · it ${r.iteration}` : "") +
+                             (age != null ? ` · ${fmtDur(age)} ago` : "");
+  renderView();
+}
+
+async function load() {
+  const btn = $("#refresh"); btn.classList.remove("spin"); void btn.offsetWidth; btn.classList.add("spin");
+  try {
+    const res = await fetch("metrics.json?t=" + Date.now(), { cache: "no-store", credentials: "same-origin" });
+    if (res.redirected || res.status === 401) { location.reload(); return; }   // login expired
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    if (state.data && data.generated === state.data.generated) return;       // nothing new
+    state.data = data;
+    render();
+  } catch (e) {
+    $("#runSub").innerHTML = `<span style="color:var(--bad)">load failed: ${esc(e.message)}</span>`;
+  }
+}
+
+$("#refresh").addEventListener("click", load);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+renderToolbars();
+setTab(state.tab);
+load();
+setInterval(() => { if (!document.hidden) load(); }, 60000);
+</script>
+</body>
+</html>

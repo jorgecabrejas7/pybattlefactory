@@ -155,8 +155,9 @@ struct Engine {
         }
     }
 
-    // Expand / evaluate / back up the selected leaves (one network call for the new ones).
-    void process(const std::vector<Pending>& pending) {
+    // Expand the selected leaves: terminal / repeated ones are backed up or deferred, new ones encoded into `enc`
+    // (toEval). Returns the number of observations for the network.
+    int expand(const std::vector<Pending>& pending) {
         toEval.clear();
         dups.clear();
         for (const Pending& p : pending) {
@@ -201,43 +202,54 @@ struct Engine {
             ns.obs->encode(*ns.game, ctx, enc[toEval.size()]);
             toEval.push_back({p.k, p.leaf, res.decisions >= cfg.maxDecisions});
         }
-
-        if (!toEval.empty()) {
-            const int B = static_cast<int>(toEval.size());
-            pri.assign(static_cast<size_t>(B) * N_ACTIONS, 0.0f);
-            val.assign(B, 0.0f);
-            auto te = Clock::now();
-            evaluator(enc.data(), B, pri.data(), val.data());
-            st.msEval += msSince(te);
-            st.netCalls++;
-            st.leaves += B;
-            valueOf.clear();
-            for (int i = 0; i < B; i++) {
-                const ToEval& e = toEval[i];
-                TreeData& t = trees[e.k];
-                float v = val[i];
-                if (e.trunc) {
-                    t.tree->setTerminal(e.leaf, v);
-                    t.setTerm(e.leaf, v);
-                } else {
-                    std::vector<float> p(pri.begin() + static_cast<size_t>(i) * N_ACTIONS,
-                                         pri.begin() + static_cast<size_t>(i + 1) * N_ACTIONS);
-                    std::vector<bool> legal(enc[i].mask, enc[i].mask + N_ACTIONS);
-                    t.tree->expand(e.leaf, p, legal);
-                }
-                t.tree->backup(e.leaf, v);
-                valueOf[{e.k, e.leaf}] = v;
-            }
-            for (auto& [k, leaf] : dups) {
-                auto it = valueOf.find({k, leaf});
-                float v = it != valueOf.end() ? it->second
-                                              : (trees[k].terminal(leaf) ? trees[k].termValue[leaf] : rootValue);
-                trees[k].tree->backup(leaf, v);
-            }
-        } else {
+        if (toEval.empty()) {
             for (auto& [k, leaf] : dups)
                 trees[k].tree->backup(leaf, trees[k].terminal(leaf) ? trees[k].termValue[leaf] : rootValue);
+            dups.clear();
         }
+        return static_cast<int>(toEval.size());
+    }
+
+    // The network's answer for the observations of the last expand: expand the leaves and back up.
+    void backup(const float* priors, const float* values) {
+        const int B = static_cast<int>(toEval.size());
+        st.netCalls++;
+        st.leaves += B;
+        valueOf.clear();
+        for (int i = 0; i < B; i++) {
+            const ToEval& e = toEval[i];
+            TreeData& t = trees[e.k];
+            float v = values[i];
+            if (e.trunc) {
+                t.tree->setTerminal(e.leaf, v);
+                t.setTerm(e.leaf, v);
+            } else {
+                std::vector<float> p(priors + static_cast<size_t>(i) * N_ACTIONS, priors + static_cast<size_t>(i + 1) * N_ACTIONS);
+                std::vector<bool> legal(enc[i].mask, enc[i].mask + N_ACTIONS);
+                t.tree->expand(e.leaf, p, legal);
+            }
+            t.tree->backup(e.leaf, v);
+            valueOf[{e.k, e.leaf}] = v;
+        }
+        for (auto& [k, leaf] : dups) {
+            auto it = valueOf.find({k, leaf});
+            float v = it != valueOf.end() ? it->second : (trees[k].terminal(leaf) ? trees[k].termValue[leaf] : rootValue);
+            trees[k].tree->backup(leaf, v);
+        }
+        toEval.clear();
+        dups.clear();
+    }
+
+    // Expand / evaluate / back up the selected leaves (one network call for the new ones).
+    void process(const std::vector<Pending>& pending) {
+        const int B = expand(pending);
+        if (B == 0) return;
+        pri.assign(static_cast<size_t>(B) * N_ACTIONS, 0.0f);
+        val.assign(B, 0.0f);
+        auto te = Clock::now();
+        evaluator(enc.data(), B, pri.data(), val.data());
+        st.msEval += msSince(te);
+        backup(pri.data(), val.data());
     }
 
     // Root visits summed over the trees and the visit-weighted mean Q (the value sums over the visits).
@@ -324,6 +336,79 @@ SearchStats runSearch(std::vector<SearchRoot>& roots, const EncodeCtx& ctx, cons
     }
     eng.finish(t0);
     return st;
+}
+
+// ---- the resumable PUCT search (SearchSession) ----
+
+struct SearchSession::Impl {
+    std::vector<SearchRoot> roots;
+    EncodeCtx ctx;
+    SearchConfig cfg;
+    SearchStats st;
+    BatchEvaluator none;
+    std::unique_ptr<Engine> eng;
+    std::vector<int> done;
+    std::vector<Pending> pending;
+    Clock::time_point t0;
+    int budget = 1, per = 1, K = 0;
+    bool finished = false;
+};
+
+SearchSession::SearchSession(std::vector<SearchRoot> roots, const EncodeCtx& ctx, const float rootPriors[7],
+                             const bool rootLegal[7], float rootValue, const SearchConfig& cfg)
+    : m(std::make_unique<Impl>()) {
+    if (roots.empty()) throw std::invalid_argument("no roots");
+    if (cfg.batch <= 0 || cfg.nSims <= 0) throw std::invalid_argument("n_sims and batch must be positive");
+    if (cfg.gumbel) throw std::invalid_argument("SearchSession is the PUCT loop");
+    m->roots = std::move(roots);
+    m->ctx = ctx;
+    m->cfg = cfg;
+    m->t0 = Clock::now();
+    m->K = static_cast<int>(m->roots.size());
+    m->eng = std::make_unique<Engine>(m->roots, m->ctx, rootValue, m->cfg, m->none, m->st);
+    m->eng->init(rootPriors, rootLegal);
+    m->budget = std::max(1, cfg.nSims / m->K);
+    m->per = std::max(1, cfg.batch / m->K);
+    m->done.assign(m->K, 1);
+}
+
+SearchSession::~SearchSession() = default;
+
+int SearchSession::prepare() {
+    if (m->finished) return -1;
+    Engine& eng = *m->eng;
+    while (true) {
+        m->pending.clear();
+        for (int k = 0; k < m->K; k++) {
+            int n = std::min(m->per, m->budget - m->done[k]);
+            if (n > 0) {
+                auto sel = eng.trees[k].tree->select(n);
+                m->done[k] = sel.empty() ? m->budget : m->done[k] + static_cast<int>(sel.size());
+                for (auto& [leaf, parent, act] : sel) m->pending.push_back({k, leaf, parent, act});
+            }
+        }
+        if (m->pending.empty()) {
+            m->finished = true;
+            eng.finish(m->t0);
+            return -1;
+        }
+        int B = eng.expand(m->pending);
+        if (B > 0) return B;
+    }
+}
+
+const EncodedObs* SearchSession::observations() const { return m->eng->enc.data(); }
+
+void SearchSession::submit(const float* priors, const float* values) { m->eng->backup(priors, values); }
+
+bool SearchSession::finished() const { return m->finished; }
+
+const SearchStats& SearchSession::stats() const { return m->st; }
+
+SearchStats SearchSession::current() const {
+    SearchStats s = m->st;
+    m->eng->aggregate(s.visits, s.q);
+    return s;
 }
 
 std::vector<int> halvingPlan(int m, int nSims) {

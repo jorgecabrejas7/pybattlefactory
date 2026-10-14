@@ -190,6 +190,20 @@ struct EncodedObs {
     int32_t mon_w, move_w, ctx_w;       // this observation's MON_NUM, MOVE_NUM, CTX_NUM
 };
 
+// rl/damage.py battle_estimates of a view (what the encoder's damage features are made of), for display:
+//   own[i][j]   own Pokemon i's move j vs the enemy's active Pokemon: (min, max) fraction of its max HP, can KO now
+//   foe[j]      the active enemy's revealed move j (in revealed order) vs our active Pokemon, same triple
+//   threat[i]   the worst revealed threat to own Pokemon i: (max fraction, can KO)
+//   speed[i]    own Pokemon i outspeeds the active enemy: (surely, maybe)
+struct BattleEstimates {
+    double own[3][4][3];
+    int n_foe;
+    double foe[4][3];
+    double threat[3][2];
+    double speed[3][2];
+};
+void estimate_battle(const ObsView& view, const EncodeCtx& ctx, int version, BattleEstimates& out);
+
 // The encoding version of encode_battle / encode_view (3 or 4; default 3). Throws std::invalid_argument otherwise.
 void set_encode_version(int version);
 int encode_version();

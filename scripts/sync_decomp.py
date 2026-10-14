@@ -191,6 +191,10 @@ EXTRACT_INCLUDES = [
 
 # Host-build patches to vendored headers: (path, old, new)
 HEADER_PATCHES = [
+    # Script labels point into the embedded script blob; on the host they are address constants
+    # (src/gen3/generated/rom_script_labels.h), defined after the GBA declarations.
+    ("include/battle_scripts.h", "\n#endif // GUARD_BATTLE_SCRIPTS_H",
+     '\n#ifdef GEN3_HOST\n#include "gen3/generated/rom_script_labels.h"\n#endif\n\n#endif // GUARD_BATTLE_SCRIPTS_H'),
     ("include/gba/defines.h",
      '#define IWRAM_DATA __attribute__((section("iwram_data")))\n'
      '#define EWRAM_DATA __attribute__((section("ewram_data")))\n'
@@ -303,13 +307,39 @@ void Host_StartSpecialTrainerBattle(void)
 """,
 }
 
+# Japanese status keys (8 bytes, EOS-padded on the GBA): the host has no charmap, so in UTF-8 they
+# overflow their declared [8] without an EOS and StringCopy runs past gBattleTextBuff1 into the
+# next strings. On the host they become distinct ASCII keys of the GBA length.
+_JPN_STATUS = [("Poison", "どく$$$$$", "PSN"), ("Sleep", "ねむり$$$$", "SLP"), ("Paralysis", "まひ$$$$$", "PAR"),
+               ("Burn", "やけど$$$$", "BRN"), ("Ice", "こおり$$$$", "FRZ"), ("Confusion", "こんらん$$$", "CNF"),
+               ("Love", "メロメロ$$$", "LOV")]
+_JPN_GBA = "\n".join(f'const u8 gStatusConditionString_{n}Jpn[] = _("{t}");' for n, t, _ in _JPN_STATUS)
+_JPN_HOST = "\n".join(f'const u8 gStatusConditionString_{n}Jpn[] = _("{k}\\xFF\\xFF\\xFF\\xFF");'
+                      for n, _, k in _JPN_STATUS)
+_JPN_STATUS_PATCH = ("src/battle_main.c", _JPN_GBA, f"#ifdef GEN3_HOST\n{_JPN_HOST}\n#else\n{_JPN_GBA}\n#endif")
+
 # Host-build patches to vendored sources: (file, old, new)
 SOURCE_PATCHES = [
+    # Two-argument entry points aliased to the three-argument functions: a call through a different
+    # signature is undefined (wasm traps on it), so they become real wrappers.
+    ("src/pokemon.c", 'u32 GetMonData2(struct Pokemon *mon, s32 field) __attribute__((alias("GetMonData3")));',
+     "#ifdef GEN3_HOST\nu32 GetMonData2(struct Pokemon *mon, s32 field) { return GetMonData3(mon, field, NULL); }\n#else\n"
+     'u32 GetMonData2(struct Pokemon *mon, s32 field) __attribute__((alias("GetMonData3")));\n#endif'),
+    ("src/pokemon.c", 'u32 GetBoxMonData2(struct BoxPokemon *boxMon, s32 field) __attribute__((alias("GetBoxMonData3")));',
+     "#ifdef GEN3_HOST\nu32 GetBoxMonData2(struct BoxPokemon *boxMon, s32 field) { return GetBoxMonData3(boxMon, field, NULL); }\n"
+     '#else\nu32 GetBoxMonData2(struct BoxPokemon *boxMon, s32 field) __attribute__((alias("GetBoxMonData3")));\n#endif'),
+    _JPN_STATUS_PATCH,
+    # hpOnSwitchout is a u8 (HP truncated): it can be 0. Then the `hp >= hpSwitchout` branch is
+    # taken and the quotient is unused, but the division still runs first (wasm traps on it).
+    ("src/battle_script_commands.c",
+     "        result = (hpSwitchout - gBattleMons[opposingBattler].hp) * 100 / hpSwitchout;",
+     "#ifdef GEN3_HOST\n        result = hpSwitchout ? (hpSwitchout - gBattleMons[opposingBattler].hp) * 100 / hpSwitchout : 0;\n"
+     "#else\n        result = (hpSwitchout - gBattleMons[opposingBattler].hp) * 100 / hpSwitchout;\n#endif"),
     # IWRAM static without a section attribute: move it into the swappable battle RAM.
     ("src/battle_factory.c", "static bool8 sPerformedRentalSwap;", "IWRAM_DATA static bool8 sPerformedRentalSwap;"),
     ("src/random.c", "    gRngValue = ISO_RANDOMIZE1(gRngValue);\n    sRandCount++;",
      "    gRngValue = ISO_RANDOMIZE1(gRngValue);\n    sRandCount++;\n#ifdef GEN3_HOST\n"
-     "    { extern void (*gGen3RandomHook)(void *); if (gGen3RandomHook) gGen3RandomHook(__builtin_return_address(0)); }\n"
+     "    { extern void (*gGen3RandomHook)(void *); if (gGen3RandomHook) gGen3RandomHook(\n#ifdef __EMSCRIPTEN__\n        0\n#else\n        __builtin_return_address(0)\n#endif\n    ); }\n"
      "#endif"),
     # The opponent's controller passes NULL here (the GBA reads BIOS open-bus bytes); the
     # bytes are only used in link multi battles.
@@ -442,6 +472,16 @@ def extract(path, seeds, replace=None):
     return defines, protos, [defs[name].strip() for name in order]
 
 
+def host_text_escapes(text):
+    """Game text escapes the charmap preprocessor knows but C does not: \\l (scroll, 0xFA) and \\p (new
+    paragraph, 0xFB) inside _("...") become octal escapes (C would turn them into the letters l and p).
+    Only the text bytes change (display; src/web reads them)."""
+    def fix(m):
+        body = re.sub(r"\\(.)", lambda e: {"l": "\\372", "p": "\\373"}.get(e.group(1), e.group(0)), m.group(1))
+        return '_("' + body + '")'
+    return re.sub(r'_\("((?:[^"\\]|\\.)*)"\)', fix, text)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pokeemerald", default=os.path.expanduser("~/Dev/pokeemerald"))
@@ -478,7 +518,7 @@ def main():
     for name in SOURCE_FILES:
         full = os.path.join(DST, "src", name + ".c")
         text = open(full).read() + SOURCE_APPENDS.get(name + ".c", "")
-        open(full, "w").write(apcs_align(text))
+        open(full, "w").write(apcs_align(host_text_escapes(text)))
     for rel in DATA_HEADERS:
         os.makedirs(os.path.dirname(os.path.join(DST, "src", rel)), exist_ok=True)
         shutil.copy(os.path.join(src_root, "src", rel), os.path.join(DST, "src", rel))

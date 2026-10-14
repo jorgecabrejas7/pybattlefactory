@@ -1,4 +1,6 @@
+#ifndef __EMSCRIPTEN__
 #define _GNU_SOURCE  // dladdr
+#endif
 // Host layer for the vendored pokeemerald battle code (third_party/pokeemerald).
 //
 // Provides what the game's other subsystems would: the frame loop, headless battle
@@ -9,7 +11,10 @@
 #include "global.h"
 #include "battle.h"
 #include "battle_ai_script_commands.h"
+#include "battle_anim.h"
 #include "battle_controllers.h"
+#include "battle_message.h"
+#include "constants/characters.h"
 #include "battle_setup.h"
 #include "event_data.h"
 #include "malloc.h"
@@ -24,7 +29,9 @@
 
 #include "gen3/host.h"
 
+#ifndef __EMSCRIPTEN__
 #include <dlfcn.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -623,15 +630,74 @@ int Gen3_ReadRam(u32 addr, void *dst, size_t size)
 
 static const char *FuncName(void *fn)
 {
+#ifndef __EMSCRIPTEN__
     Dl_info info;
     if (fn && dladdr(fn, &info) && info.dli_sname)
         return info.dli_sname;
+#endif
     return fn ? "?" : "NULL";
 }
 
 // Optional Random() call tracing (debugging RNG-order divergences).
 void (*gGen3RandomHook)(void *) = NULL;
 void (*gGen3MessageHook)(uint16_t, uint8_t, uint8_t, uint8_t, uint8_t, uint16_t) = NULL;
+
+#include "gen3/generated/battle_placeholders.h"
+
+// The text of the message being printed (call from gGen3MessageHook): the game's own
+// BufferStringBattle on the active battler's message data, then every bit of battle RAM it touched
+// is restored, so the battle is unchanged. Writes the game-encoded string (EOS-terminated, at most
+// `cap` bytes) to `out`; returns its length.
+int Gen3_BattleMessageText(uint16_t stringId, uint8_t *out, int cap)
+{
+    static u8 *saved;
+    u8 src[sizeof(gDisplayedStringBattle)];
+    u32 i, j = 0, k;
+    int n = 0;
+    if (!saved)
+        saved = malloc(Gen3_StateSize());
+    Gen3_SaveState(saved);
+    BufferStringBattle(stringId);
+    // The host's literals keep "{B_...}" placeholders spelled out and '\n' as is: encode them like the
+    // charmap does, then expand them with the game's own code (names, moves, items, numbers).
+    for (i = 0; i < sizeof(gDisplayedStringBattle) && gDisplayedStringBattle[i] != EOS && j + 2 < sizeof(src); i++)
+    {
+        const u8 *c = &gDisplayedStringBattle[i];
+        if (*c == '{')
+        {
+            for (k = 0; k < ARRAY_COUNT(sGen3BattlePlaceholders); k++)
+            {
+                const char *name = sGen3BattlePlaceholders[k].name;
+                u32 len = strlen(name);
+                // trainer / player names come from tables the host build leaves empty: kept spelled out
+                if (strstr(name, "TRAINER") || strstr(name, "LINK_") || strstr(name, "PLAYER_NAME")
+                    || strstr(name, "PARTNER_") || strstr(name, "PC_CREATOR") || strcmp(name, "B_26") == 0)
+                    continue;
+                if (i + len + 1 < sizeof(gDisplayedStringBattle)
+                    && memcmp(c + 1, name, len) == 0 && c[len + 1] == '}')
+                {
+                    src[j++] = PLACEHOLDER_BEGIN;
+                    src[j++] = sGen3BattlePlaceholders[k].code;
+                    i += len + 1;
+                    break;
+                }
+            }
+            if (k < ARRAY_COUNT(sGen3BattlePlaceholders))
+                continue;
+        }
+        src[j++] = (*c == '\n') ? CHAR_NEWLINE : *c;
+    }
+    src[j] = EOS;
+    BattleStringExpandPlaceholders(src, gDisplayedStringBattle);
+    while (n < cap - 1 && n < (int)sizeof(gDisplayedStringBattle) && gDisplayedStringBattle[n] != EOS)
+    {
+        out[n] = gDisplayedStringBattle[n];
+        n++;
+    }
+    out[n] = EOS;
+    Gen3_LoadState(saved);
+    return n;
+}
 
 static void LogRandomCaller(void *returnAddress)
 {

@@ -5,6 +5,7 @@ extern "C" {
 #include "gen3/search_host.h"
 }
 
+#include <algorithm>
 #include <stdexcept>
 
 namespace pkmn {
@@ -230,8 +231,22 @@ void Gen3Game::traceRandom(bool enable) {
 
 namespace {
 void onMessage(uint16_t stringId, uint8_t active, uint8_t attacker, uint8_t target, uint8_t effect, uint16_t move) {
-    if (s_live && s_live->messageLog())
-        s_live->pushMessage({stringId, active, attacker, target, effect, move});
+    if (!s_live || !s_live->messageLog()) return;
+    Gen3Game::Message m{stringId, active, attacker, target, effect, move, {}, {}, {}, {}, {}};
+    if (s_live->messageText()) {
+        uint8_t buf[320];
+        int n = Gen3_BattleMessageText(stringId, buf, sizeof buf);
+        m.text.assign(reinterpret_cast<const char*>(buf), size_t(n));
+        const uint8_t* mons = static_cast<const uint8_t*>(Gen3_ResolveAddress(0x2024084));   // gBattleMons
+        for (int b = 0; b < 2; b++) {
+            const uint8_t* p = mons + 0x58 * b;
+            m.species[b] = p[0] | p[1] << 8;
+            m.hp[b] = p[0x28] | p[0x29] << 8;
+            m.maxHp[b] = p[0x2C] | p[0x2D] << 8;
+            m.status1[b] = uint32_t(p[0x4C]) | uint32_t(p[0x4D]) << 8 | uint32_t(p[0x4E]) << 16 | uint32_t(p[0x4F]) << 24;
+        }
+    }
+    s_live->pushMessage(m);
 }
 }  // namespace
 
@@ -310,6 +325,13 @@ std::string Gen3Game::stateBytes() {
     activate();
     Gen3_SaveState(m_state.data());
     return std::string(m_state.begin(), m_state.end());
+}
+
+void Gen3Game::loadStateBytes(const std::string& bytes) {
+    if (bytes.size() != m_state.size()) throw std::invalid_argument("state size differs (another build?)");
+    std::copy(bytes.begin(), bytes.end(), m_state.begin());
+    m_determinized = false;
+    if (s_live == this) Gen3_LoadState(m_state.data());
 }
 
 long Gen3Game::stateOffset(uint32_t gbaAddress, bool deref) {

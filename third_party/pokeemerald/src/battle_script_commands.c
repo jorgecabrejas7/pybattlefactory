@@ -6293,7 +6293,11 @@ static void Cmd_hpthresholds2(void)
         gActiveBattler = GetBattlerForBattleScript(gBattlescriptCurrInstr[1]);
         opposingBattler = BATTLE_OPPOSITE(gActiveBattler);
         hpSwitchout = *(gBattleStruct->hpOnSwitchout + GetBattlerSide(opposingBattler));
+#ifdef GEN3_HOST
+        result = hpSwitchout ? (hpSwitchout - gBattleMons[opposingBattler].hp) * 100 / hpSwitchout : 0;
+#else
         result = (hpSwitchout - gBattleMons[opposingBattler].hp) * 100 / hpSwitchout;
+#endif
 
         if (gBattleMons[opposingBattler].hp >= hpSwitchout)
             gBattleStruct->hpScale = 0;

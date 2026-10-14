@@ -9,7 +9,10 @@ __pycache__/
 build_tests/
 .scratch/
 build-dbg/
+build-wasm/
 runs/
 watch_log.jsonl
 shot_*.png
 .claude/
+dashboard/metrics.json
+dashboard/.cache/

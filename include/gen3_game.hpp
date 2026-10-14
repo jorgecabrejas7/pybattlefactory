@@ -68,8 +68,17 @@ public:
     // Message log (diagnostics): while enabled, every battle message this game prints (CONTROLLER_PRINTSTRING)
     // is recorded as {string id, active battler, attacker, target, effect battler, current move}. Clones start
     // with the log disabled and empty. takeMessages() returns the log and clears it.
-    struct Message { int stringId, active, attacker, target, effect, move; };
+    struct Message {
+        int stringId, active, attacker, target, effect, move;
+        // with setMessageText(true): the message as the game buffers it (game encoding), and the two active
+        // battlers when it is printed (gBattleMons[0..1])
+        std::string text;
+        int species[2], hp[2], maxHp[2];
+        uint32_t status1[2];
+    };
     void setMessageLog(bool enable);
+    void setMessageText(bool enable) { m_messageText = enable; }
+    bool messageText() const { return m_messageText; }
     bool messageLog() const { return m_logMessages; }
     std::vector<Message> takeMessages();
     void pushMessage(const Message& m) { m_messages.push_back(m); }
@@ -103,6 +112,8 @@ public:
 
     // Tests / debugging: the whole state, and where a GBA symbol (or what a pointer symbol points to) is in it.
     std::string stateBytes();
+    // Restore a stateBytes() of the same build (std::invalid_argument on a size mismatch).
+    void loadStateBytes(const std::string& bytes);
     long stateOffset(uint32_t gbaAddress, bool deref);
 
     // Make this game's state the live battle RAM (for direct readers such as the C++ observer).
@@ -113,6 +124,7 @@ private:
     std::vector<uint8_t> m_state;
     bool m_determinized = false;
     bool m_logMessages = false;
+    bool m_messageText = false;
     std::vector<Message> m_messages;
 };
 
